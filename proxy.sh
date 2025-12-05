@@ -66,7 +66,7 @@ start_proxy() {
     echo "=== 启动代理配置 ==="
     echo ""
     
-    SECRET=$(head -c 16 /dev/urandom | xxd -ps)
+    SECRET=$(head -c 32 /dev/urandom | xxd -ps)
     PORT=$((RANDOM % 55535 + 10000))
     
     echo "生成的密钥: $SECRET"

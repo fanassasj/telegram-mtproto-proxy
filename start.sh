@@ -12,7 +12,7 @@ if ! command -v xxd &> /dev/null; then
 fi
 
 # 生成密钥和端口
-SECRET=$(head -c 16 /dev/urandom | xxd -ps)
+SECRET=$(head -c 32 /dev/urandom | xxd -ps)
 PORT=$((RANDOM % 55535 + 10000))
 
 echo "生成的密钥: $SECRET"
@@ -117,11 +117,9 @@ services:
     container_name: telegram-nginx
     restart: unless-stopped
     ports:
-      - "80:80"
       - "$PORT:$PORT"
     volumes:
-      - ./index.html:/usr/share/nginx/html/index.html:ro
-      - ./nginx-runtime.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx-runtime.conf:/etc/nginx/nginx.conf:ro
     depends_on:
       - mtproto-proxy
     networks:
@@ -134,11 +132,6 @@ services:
         reservations:
           cpus: '0.1'
           memory: 64M
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:80"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
 
 networks:
   proxy-net:
