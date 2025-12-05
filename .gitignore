@@ -1,0 +1,18 @@
+# 配置文件
+.env
+docker-compose.yml
+nginx-runtime.conf
+
+# 数据目录
+config/
+
+# 日志文件
+*.log
+
+# 备份文件
+telegram-proxy-backup-*.tar.gz
+
+# 临时文件
+*.tmp
+*.swp
+*~
