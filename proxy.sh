@@ -66,7 +66,7 @@ start_proxy() {
     echo "=== 启动代理配置 ==="
     echo ""
     
-    SECRET=$(head -c 32 /dev/urandom | xxd -ps | tr -d '\n')
+    SECRET=$(head -c 16 /dev/urandom | xxd -ps | tr -d '\n')
     PORT=$((RANDOM % 55535 + 10000))
     
     echo "生成的密钥: $SECRET"
@@ -421,7 +421,7 @@ change_secret() {
     
     source .env
     OLD_SECRET=$SECRET
-    NEW_SECRET=$(head -c 32 /dev/urandom | xxd -ps | tr -d '\n')
+    NEW_SECRET=$(head -c 16 /dev/urandom | xxd -ps | tr -d '\n')
     
     echo "当前密钥: $OLD_SECRET"
     echo "新密钥: $NEW_SECRET"

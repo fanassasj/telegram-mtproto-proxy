@@ -12,7 +12,7 @@ if ! command -v xxd &> /dev/null; then
 fi
 
 # 生成密钥和端口
-SECRET=$(head -c 32 /dev/urandom | xxd -ps | tr -d '\n')
+SECRET=$(head -c 16 /dev/urandom | xxd -ps | tr -d '\n')
 PORT=$((RANDOM % 55535 + 10000))
 
 echo "生成的密钥: $SECRET"
