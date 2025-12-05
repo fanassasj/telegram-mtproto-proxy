@@ -28,7 +28,7 @@
 
 ```bash
 # 克隆项目
-git clone https://github.com/YOUR_USERNAME/telegram-mtproto-proxy.git
+git clone https://github.com/fanassasj/telegram-mtproto-proxy.git
 cd telegram-mtproto-proxy
 
 # 运行管理脚本

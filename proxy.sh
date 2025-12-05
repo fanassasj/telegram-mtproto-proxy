@@ -23,14 +23,38 @@ show_menu() {
     echo "13) 恢复配置"
     echo "14) 更新镜像"
     echo "15) IP 白名单"
-    echo "16) 完全卸载"
+    echo "16) 开机自启"
+    echo "17) 完全卸载"
     echo "0) 退出"
     echo ""
-    echo -n "请选择 [0-16]: "
+    echo -n "请选择 [0-17]: "
 }
 
 start_proxy() {
     echo ""
+    
+    # 检测是否已启动
+    if [ -f .env ] && docker ps | grep -q telegram-mtproto-proxy; then
+        echo "⚠️  检测到代理已在运行"
+        echo ""
+        source .env
+        echo "当前配置："
+        echo "- 端口: $PORT"
+        echo "- 密钥: $SECRET"
+        echo ""
+        read -p "是否重新配置? 将停止当前服务 (y/n): " RECONFIG
+        
+        if [ "$RECONFIG" != "y" ]; then
+            echo "已取消"
+            read -p "按回车键继续..."
+            return
+        fi
+        
+        echo ""
+        echo "正在停止当前服务..."
+        docker compose down
+    fi
+    
     echo "=== 启动代理配置 ==="
     echo ""
     
@@ -692,6 +716,76 @@ manage_whitelist() {
     read -p "按回车键继续..."
 }
 
+manage_autostart() {
+    echo ""
+    echo "=== 开机自启管理 ==="
+    echo ""
+    echo "1) 启用开机自启"
+    echo "2) 禁用开机自启"
+    echo "3) 查看状态"
+    echo "0) 返回"
+    echo ""
+    read -p "请选择: " choice
+    
+    case $choice in
+        1)
+            if [ ! -f .env ]; then
+                echo ""
+                echo "错误: 代理未启动，请先启动代理"
+            else
+                echo ""
+                SCRIPT_DIR=$(pwd)
+                
+                # 创建 systemd 服务
+                cat > /etc/systemd/system/telegram-proxy.service <<EOF
+[Unit]
+Description=Telegram MTProto Proxy
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=$SCRIPT_DIR
+ExecStart=/usr/bin/docker compose up -d
+ExecStop=/usr/bin/docker compose stop
+StandardOutput=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+                
+                systemctl daemon-reload
+                systemctl enable telegram-proxy.service
+                
+                echo "✅ 开机自启已启用"
+                echo ""
+                echo "服务将在系统重启后自动启动"
+            fi
+            ;;
+        2)
+            echo ""
+            systemctl disable telegram-proxy.service 2>/dev/null
+            rm -f /etc/systemd/system/telegram-proxy.service
+            systemctl daemon-reload
+            echo "✅ 开机自启已禁用"
+            ;;
+        3)
+            echo ""
+            if systemctl is-enabled telegram-proxy.service 2>/dev/null | grep -q enabled; then
+                echo "状态: ✅ 已启用"
+                echo ""
+                systemctl status telegram-proxy.service --no-pager
+            else
+                echo "状态: ❌ 未启用"
+            fi
+            ;;
+    esac
+    
+    echo ""
+    read -p "按回车键继续..."
+}
+
 uninstall() {
     echo ""
     echo "警告: 此操作将删除所有容器、配置和数据"
@@ -705,6 +799,11 @@ uninstall() {
     
     echo ""
     echo "正在卸载..."
+    
+    # 禁用开机自启
+    systemctl disable telegram-proxy.service 2>/dev/null
+    rm -f /etc/systemd/system/telegram-proxy.service
+    systemctl daemon-reload
     
     docker compose down -v 2>/dev/null
     docker rm -f telegram-mtproto-proxy telegram-nginx 2>/dev/null
@@ -744,7 +843,8 @@ while true; do
         13) restore_config ;;
         14) update_image ;;
         15) manage_whitelist ;;
-        16) uninstall ;;
+        16) manage_autostart ;;
+        17) uninstall ;;
         0) echo ""; echo "再见！"; exit 0 ;;
         *) echo ""; echo "无效选择"; sleep 1 ;;
     esac
