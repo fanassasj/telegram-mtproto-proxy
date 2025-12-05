@@ -3,6 +3,14 @@
 echo "=== Telegram MTProto 代理配置 ==="
 echo ""
 
+# 检查 xxd 命令
+if ! command -v xxd &> /dev/null; then
+    echo "⚠️  缺少 xxd 命令，正在安装..."
+    apt-get update -qq && apt-get install -y xxd -qq
+    echo "✅ xxd 已安装"
+    echo ""
+fi
+
 # 生成密钥和端口
 SECRET=$(head -c 16 /dev/urandom | xxd -ps)
 PORT=$((RANDOM % 55535 + 10000))

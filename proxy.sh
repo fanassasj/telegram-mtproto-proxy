@@ -33,6 +33,14 @@ show_menu() {
 start_proxy() {
     echo ""
     
+    # 检查 xxd 命令
+    if ! command -v xxd &> /dev/null; then
+        echo "⚠️  缺少 xxd 命令，正在安装..."
+        apt-get update -qq && apt-get install -y xxd -qq
+        echo "✅ xxd 已安装"
+        echo ""
+    fi
+    
     # 检测是否已启动
     if [ -f .env ] && docker ps | grep -q telegram-mtproto-proxy; then
         echo "⚠️  检测到代理已在运行"
