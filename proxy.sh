@@ -42,7 +42,7 @@ start_proxy() {
     fi
     
     # 检测是否已启动
-    if [ -f .env ] && docker ps | grep -q telegram-mtproto-proxy; then
+    if [ -f .env ] && docker ps --format '{{.Names}}' | grep -q "^telegram-mtproto-proxy$"; then
         echo "⚠️  检测到代理已在运行"
         echo ""
         source .env
@@ -330,7 +330,7 @@ show_qrcode() {
 }
 
 show_monitor() {
-    if ! docker ps | grep -q telegram-mtproto-proxy; then
+    if ! docker ps --format '{{.Names}}' | grep -q "^telegram-mtproto-proxy$"; then
         echo ""
         echo "错误: 容器未运行"
         read -p "按回车键继续..."
@@ -344,7 +344,7 @@ show_monitor() {
 }
 
 show_stats() {
-    if ! docker ps | grep -q telegram-mtproto-proxy; then
+    if ! docker ps --format '{{.Names}}' | grep -q "^telegram-mtproto-proxy$"; then
         echo ""
         echo "错误: 容器未运行"
         read -p "按回车键继续..."

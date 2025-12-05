@@ -5,7 +5,7 @@ CONTAINER="telegram-mtproto-proxy"
 echo "=== Telegram MTProto 代理流量监控 ==="
 echo ""
 
-if ! docker ps | grep -q $CONTAINER; then
+if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER}$"; then
     echo "错误: 容器未运行"
     exit 1
 fi

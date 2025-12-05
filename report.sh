@@ -3,7 +3,7 @@
 CONTAINER="telegram-mtproto-proxy"
 STATS_FILE="./config/stats.log"
 
-if ! docker ps | grep -q $CONTAINER; then
+if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER}$"; then
     echo "错误: 容器未运行"
     exit 1
 fi
