@@ -1,19 +1,122 @@
 #!/bin/bash
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR" || exit 1
+
+
+require_command() {
+    if ! command -v "$1" >/dev/null 2>&1; then
+        echo "错误: 缺少依赖命令 $1"
+        exit 1
+    fi
+}
+
+check_prereqs() {
+    require_command docker
+    require_command od
+
+    if ! docker compose version >/dev/null 2>&1; then
+        echo "错误: 未检测到 docker compose，请先安装 Docker Compose 插件"
+        exit 1
+    fi
+
+    if ! docker info >/dev/null 2>&1; then
+        echo "错误: Docker 服务未运行，请先启动 Docker"
+        exit 1
+    fi
+}
+
+generate_secret() {
+    head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n'
+}
+
+is_port_free() {
+    local port="$1"
+    local pattern="(^|[:.])${port}$"
+
+    if command -v ss >/dev/null 2>&1; then
+        ! ss -ltn 2>/dev/null | awk '{print $4}' | grep -Eq "$pattern"
+    elif command -v netstat >/dev/null 2>&1; then
+        ! netstat -ltn 2>/dev/null | awk '{print $4}' | grep -Eq "$pattern"
+    else
+        return 0
+    fi
+}
+
+generate_port() {
+    local candidate
+    local raw
+    local i
+
+    for ((i=0; i<50; i++)); do
+        raw=$(od -An -N2 -tu2 /dev/urandom | tr -d ' ')
+        candidate=$((raw % 55536 + 10000))
+        if is_port_free "$candidate"; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+
+    echo "错误: 无法找到空闲端口，请稍后重试"
+    exit 1
+}
+
+calc_ceil_rate() {
+    local rate="$1"
+    local normalized="${rate,,}"
+
+    if [[ "$normalized" =~ ^([0-9]+)(kbit|mbit|gbit)$ ]]; then
+        echo "$((BASH_REMATCH[1] * 2))${BASH_REMATCH[2]}"
+    else
+        echo "$rate"
+    fi
+}
+
+apply_traffic_limit() {
+    local rate="$1"
+    local port="$2"
+    local iface
+    local normalized_rate
+    local ceil_rate
+
+    if ! command -v ip >/dev/null 2>&1 || ! command -v tc >/dev/null 2>&1; then
+        echo "⚠️  未找到 ip/tc 命令，跳过流量限制"
+        return 1
+    fi
+
+    iface=$(ip -o link show | awk -F': ' '{print $2}' | grep -v '^lo$' | head -1)
+    if [ -z "$iface" ]; then
+        echo "⚠️  未找到可用网卡，跳过流量限制"
+        return 1
+    fi
+
+    normalized_rate="${rate,,}"
+    ceil_rate=$(calc_ceil_rate "$normalized_rate")
+    tc qdisc del dev "$iface" root 2>/dev/null
+    tc qdisc add dev "$iface" root handle 1: htb default 10 || return 1
+    tc class add dev "$iface" parent 1: classid 1:1 htb rate "$normalized_rate" ceil "$ceil_rate" || return 1
+    tc filter add dev "$iface" protocol ip parent 1:0 prio 1 u32 match ip dport "$port" 0xffff flowid 1:1 || return 1
+
+    echo "✅ 流量限制已设置: $normalized_rate (接口: $iface)"
+}
+
+is_valid_rate() {
+    local rate="${1,,}"
+    [[ "$rate" =~ ^[0-9]+(kbit|mbit|gbit)$ ]]
+}
+
+sanitize_rate() {
+    echo "${1,,}"
+}
+
+check_prereqs
+
 echo "=== Telegram MTProto 代理配置 ==="
 echo ""
 
-# 检查 xxd 命令
-if ! command -v xxd &> /dev/null; then
-    echo "⚠️  缺少 xxd 命令，正在安装..."
-    apt-get update -qq && apt-get install -y xxd -qq
-    echo "✅ xxd 已安装"
-    echo ""
-fi
-
 # 生成密钥和端口
-SECRET=$(head -c 16 /dev/urandom | xxd -ps | tr -d '\n')
-PORT=$((RANDOM % 55535 + 10000))
+SECRET=$(generate_secret)
+PORT=$(generate_port)
 
 echo "生成的密钥: $SECRET"
 echo "生成的端口: $PORT"
@@ -30,6 +133,11 @@ USE_LIMIT=${USE_LIMIT:-n}
 if [ "$USE_LIMIT" = "y" ]; then
     read -p "输入限制速率 (默认 10mbit): " LIMIT_RATE
     LIMIT_RATE=${LIMIT_RATE:-10mbit}
+    LIMIT_RATE=$(sanitize_rate "$LIMIT_RATE")
+    if ! is_valid_rate "$LIMIT_RATE"; then
+        echo "⚠️  限速格式无效，已使用默认值 10mbit"
+        LIMIT_RATE="10mbit"
+    fi
 fi
 
 # 询问是否启用告警
@@ -101,12 +209,6 @@ services:
         reservations:
           cpus: '0.25'
           memory: 128M
-    healthcheck:
-      test: ["CMD", "nc", "-z", "localhost", "443"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
     sysctls:
       - net.ipv4.tcp_keepalive_time=600
       - net.ipv4.tcp_keepalive_intvl=60
@@ -117,9 +219,11 @@ services:
     container_name: telegram-nginx
     restart: unless-stopped
     ports:
+      - "80:80"
       - "$PORT:$PORT"
     volumes:
-      - ./nginx-runtime.conf:/etc/nginx/nginx.conf:ro
+      - ./index.html:/usr/share/nginx/html/index.html:ro
+      - ./nginx-runtime.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
       - mtproto-proxy
     networks:
@@ -163,12 +267,6 @@ services:
         reservations:
           cpus: '0.25'
           memory: 128M
-    healthcheck:
-      test: ["CMD", "nc", "-z", "localhost", "443"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
     sysctls:
       - net.ipv4.tcp_keepalive_time=600
       - net.ipv4.tcp_keepalive_intvl=60
@@ -176,19 +274,39 @@ services:
 EOF
 fi
 
+# 确保必需目录/文件存在
+mkdir -p config
+if [ "$USE_NGINX" = "y" ] && [ ! -f index.html ]; then
+    cat > index.html <<'HTML_EOF'
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Welcome</title>
+    <style>
+        body { font-family: Arial; text-align: center; padding: 50px; }
+        h1 { color: #333; }
+    </style>
+</head>
+<body>
+    <h1>Welcome</h1>
+    <p>This is a personal website.</p>
+</body>
+</html>
+HTML_EOF
+fi
+
 # 启动服务
-docker compose up -d
+if ! docker compose up -d; then
+    echo "❌ 启动失败，请检查日志: docker compose logs --tail 100"
+    exit 1
+fi
 
 # 设置流量限制
 if [ "$USE_LIMIT" = "y" ]; then
     echo ""
     echo "设置流量限制..."
-    IFACE=$(ip -o link show | awk -F': ' '{print $2}' | grep -v lo | head -1)
-    tc qdisc del dev $IFACE root 2>/dev/null
-    tc qdisc add dev $IFACE root handle 1: htb default 10
-    tc class add dev $IFACE parent 1: classid 1:1 htb rate $LIMIT_RATE ceil $((${LIMIT_RATE%mbit}*2))mbit
-    tc filter add dev $IFACE protocol ip parent 1:0 prio 1 u32 match ip dport $PORT 0xffff flowid 1:1
-    echo "✅ 流量限制已设置: $LIMIT_RATE (接口: $IFACE)"
+    apply_traffic_limit "$LIMIT_RATE" "$PORT" || echo "⚠️  流量限制设置失败，请检查 tc 参数"
 fi
 
 # 设置告警

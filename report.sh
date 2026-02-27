@@ -1,5 +1,9 @@
 #!/bin/bash
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR" || exit 1
+
+
 CONTAINER="telegram-mtproto-proxy"
 STATS_FILE="./config/stats.log"
 

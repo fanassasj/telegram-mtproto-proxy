@@ -1,5 +1,9 @@
 #!/bin/bash
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR" || exit 1
+
+
 CONTAINER="telegram-mtproto-proxy"
 
 if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER}$"; then
@@ -22,7 +26,11 @@ echo ""
 echo "=== 连接统计 ==="
 PORT=$(docker port $CONTAINER 443 | cut -d: -f2)
 if [ ! -z "$PORT" ]; then
-    CONNECTIONS=$(netstat -an | grep ":$PORT" | grep ESTABLISHED | wc -l)
+    if command -v ss >/dev/null 2>&1; then
+        CONNECTIONS=$(ss -tan 2>/dev/null | awk -v port=":$PORT" '$1 == "ESTAB" && $4 ~ port"$" {count++} END {print count+0}')
+    else
+        CONNECTIONS=$(netstat -an 2>/dev/null | grep ":$PORT" | grep ESTABLISHED | wc -l)
+    fi
     echo "当前活跃连接数: $CONNECTIONS"
     echo "端口: $PORT"
 fi

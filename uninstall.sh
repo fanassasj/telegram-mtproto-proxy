@@ -1,5 +1,9 @@
 #!/bin/bash
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR" || exit 1
+
+
 echo "=== Telegram MTProto 代理卸载 ==="
 echo ""
 echo "警告: 此操作将："
@@ -31,7 +35,7 @@ crontab -l 2>/dev/null | grep -v "alert.sh" | grep -v "report.sh" | crontab - 2>
 
 # 删除配置文件
 rm -rf config/
-rm -f .env docker compose.yml nginx-runtime.conf
+rm -f .env docker-compose.yml nginx-runtime.conf
 rm -f /tmp/telegram-proxy-alert.log
 
 echo ""

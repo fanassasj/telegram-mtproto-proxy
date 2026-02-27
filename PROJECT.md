@@ -4,6 +4,7 @@
 
 ```
 telegram-mtproto-proxy/
+├── proxy.sh          # 一体化管理脚本（推荐）
 ├── start.sh          # 主启动脚本（交互式配置）
 ├── qrcode.sh         # 生成连接二维码
 ├── monitor.sh        # 实时监控
@@ -18,9 +19,11 @@ telegram-mtproto-proxy/
 
 ## 核心功能
 
-### 1. 一键启动 (start.sh)
+### 1. 一体化管理 (proxy.sh / start.sh)
 - 自动生成随机端口和密钥
-- 交互式选择功能：
+- 交互式管理功能：
+  - 启动/停止/重启/状态查看
+  - 环境自检
   - Nginx 伪装（隐藏代理特征）
   - 流量限制（防止滥用）
   - 告警监控（异常检测）
@@ -33,11 +36,9 @@ telegram-mtproto-proxy/
 - 可选 Nginx 反向代理伪装
 
 ### 3. 性能优化
-- CPU 限制：1核（预留 0.25核）
-- 内存限制：512MB（预留 128MB）
 - TCP 连接优化（keepalive）
-- 自动健康检查（30秒间隔）
-- 异常自动重启
+- 容器异常自动重启（unless-stopped）
+- 日志轮转（10MB × 3）
 
 ### 4. 监控系统
 - **实时监控** (monitor.sh)：CPU、内存、网络 I/O
@@ -52,6 +53,7 @@ telegram-mtproto-proxy/
 
 ### 6. 便捷工具
 - **二维码生成** (qrcode.sh)：手机扫码连接
+- **环境自检** (proxy.sh 菜单 18)：检查 Docker、配置、依赖
 - **一键卸载** (uninstall.sh)：完全清理
 
 ## 快速开始
@@ -118,7 +120,7 @@ docker compose stop
 
 ## 文件说明
 
-- `docker compose.yml`：自动生成，包含服务配置
+- `docker-compose.yml`：自动生成，包含服务配置
 - `nginx-runtime.conf`：Nginx 配置（启用伪装时生成）
 - `config/`：数据目录
 - `config/stats.log`：统计日志（启用统计时生成）
