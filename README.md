@@ -8,13 +8,12 @@
 ## 特性
 
 - 🚀 **一键部署** - 单个脚本完成所有配置
-- 🔐 **安全可靠** - 随机端口和密钥，可选 Nginx 伪装
+- 🔐 **安全可靠** - 随机端口和密钥，默认显示 Fake TLS 推荐链接
 - 📊 **完整监控** - 实时监控、流量统计、使用报告
 - 🔔 **智能告警** - CPU/内存异常自动通知
-- 🎯 **流量控制** - 可设置带宽限制
+- 🎯 **月度限量** - 默认每月 30GiB，每月 1 号刷新，超量自动停止代理
 - 🔄 **灵活管理** - 支持密钥/端口更换、备份恢复
 - 🛡️ **访问控制** - IP 白名单支持
-- 🧪 **环境自检** - 一键检查 Docker、配置和依赖
 - 📱 **移动友好** - 自动生成二维码，支持 IPv4/IPv6
 
 ## 快速开始
@@ -70,9 +69,9 @@ cd telegram-mtproto-proxy
 13) 恢复配置
 14) 更新镜像
 15) IP 白名单
-16) 开机自启
-17) 完全卸载
-18) 环境自检
+16) 流量限量
+17) 开机自启
+18) 完全卸载
 0)  退出
 ```
 
@@ -80,17 +79,17 @@ cd telegram-mtproto-proxy
 
 启动时可选择：
 
-- **Nginx 伪装** - 隐藏代理特征，伪装成普通网站
-- **流量限制** - 防止带宽滥用，可自定义速率
+- **月度流量限量** - 默认 30GiB，每月 1 号刷新
 - **告警监控** - CPU/内存异常时自动告警（支持 Telegram 通知）
 - **使用统计** - 每小时记录流量和资源使用情况
 
 ## 性能优化
 
+- ✅ 自动健康检查（30秒间隔）
+- ✅ 资源限制（CPU: 1核, 内存: 512MB）
 - ✅ TCP 连接优化（keepalive 参数）
 - ✅ 异常自动重启
 - ✅ 日志自动轮转（最大 10MB × 3 个文件）
-- ✅ 宿主机侧告警监控（避免镜像内依赖问题）
 
 ## 监控命令
 
@@ -99,7 +98,8 @@ cd telegram-mtproto-proxy
 ./stats.sh    # 查看流量统计和连接数
 ./report.sh   # 查看历史使用报告
 ./alert.sh    # 手动检查告警
-./proxy.sh    # 菜单 18：环境自检
+./healthcheck.sh # 连接故障健康检查
+./quota.sh    # 月度流量限量检查
 ```
 
 ## 高级功能
@@ -128,12 +128,6 @@ cd telegram-mtproto-proxy
 # 支持单个 IP、IP 段（CIDR）、运营商 IP 段
 ```
 
-### 环境自检
-
-```bash
-./proxy.sh  # 选择 18 (环境自检)
-```
-
 ### Telegram 通知
 
 编辑 `alert.sh`，配置：
@@ -150,12 +144,13 @@ telegram-mtproto-proxy/
 ├── proxy.sh          # 一体化管理脚本（推荐）
 ├── start.sh          # 启动脚本
 ├── qrcode.sh         # 二维码生成
+├── healthcheck.sh    # 健康检查
+├── quota.sh          # 月度流量限量
 ├── monitor.sh        # 实时监控
 ├── stats.sh          # 流量统计
 ├── report.sh         # 使用报告
 ├── alert.sh          # 告警检查
 ├── uninstall.sh      # 完全卸载
-├── index.html        # Nginx 伪装页面
 ├── README.md         # 使用文档
 └── PROJECT.md        # 项目详细说明
 ```
@@ -167,7 +162,7 @@ telegram-mtproto-proxy/
 
 ### 方式2：点击链接
 ```
-tg://proxy?server=YOUR_IP&port=PORT&secret=SECRET
+tg://proxy?server=YOUR_IP&port=PORT&secret=FAKE_TLS_SECRET
 ```
 
 ### 方式3：手动配置
@@ -179,7 +174,7 @@ tg://proxy?server=YOUR_IP&port=PORT&secret=SECRET
 A: 运行 `./proxy.sh` 选择 11 (更换端口)
 
 **Q: 如何提高安全性？**  
-A: 启用 Nginx 伪装 + IP 白名单 + 定期更换密钥
+A: 优先使用 Fake TLS 推荐链接，并按需启用 IP 白名单、定期更换密钥和端口
 
 **Q: 手机 IP 不固定如何设置白名单？**  
 A: 添加运营商 IP 段（如 120.0.0.0/8）或不设白名单
@@ -202,13 +197,12 @@ A: 当前版本单密钥，可通过更换密钥分配给不同用户
 
 - [Telegram MTProto Proxy](https://github.com/TelegramMessenger/MTProxy) - 官方代理
 - Docker & Docker Compose - 容器化部署
-- Nginx - 反向代理和伪装
 - Bash - 自动化脚本
 
 ## 卸载
 
 ```bash
-./proxy.sh  # 选择 17 (完全卸载)
+./proxy.sh  # 选择 16 (完全卸载)
 # 或
 ./uninstall.sh
 ```

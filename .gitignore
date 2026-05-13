@@ -1,7 +1,6 @@
 # 配置文件
 .env
 docker-compose.yml
-nginx-runtime.conf
 
 # 数据目录
 config/

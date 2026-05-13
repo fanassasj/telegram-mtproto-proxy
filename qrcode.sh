@@ -1,44 +1,46 @@
 #!/bin/bash
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR" || exit 1
-
-load_env_config() {
-    local key value
-
-    PORT=""
-    SECRET=""
-    while IFS='=' read -r key value; do
-        key=$(echo "$key" | tr -d ' \t\r')
-        value=$(echo "$value" | tr -d '\r')
-        value="${value%\"}"
-        value="${value#\"}"
-        case "$key" in
-            PORT|SECRET)
-                printf -v "$key" '%s' "$value"
-                ;;
-        esac
-    done < .env
-
-    [[ "$PORT" =~ ^[0-9]+$ ]] && [[ "$SECRET" =~ ^[0-9a-fA-F]{32}$ ]]
-}
-
-url_encode() {
-    local raw="$1"
-    echo -n "$raw" | jq -sRr @uri 2>/dev/null || \
-    python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.stdin.read().strip()))" <<< "$raw" 2>/dev/null || \
-    echo "$raw"
-}
-
 if [ ! -f .env ]; then
     echo "错误: 未找到配置文件，请先运行 ./start.sh"
     exit 1
 fi
 
-if ! load_env_config; then
-    echo "错误: 配置文件无效，请重新运行 ./start.sh 或 ./proxy.sh"
-    exit 1
-fi
+source .env
+FAKE_TLS_DOMAIN=${FAKE_TLS_DOMAIN:-www.microsoft.com}
+FAKE_TLS_DOMAIN_HEX=$(printf "%s" "$FAKE_TLS_DOMAIN" | xxd -ps -c 256)
+FAKE_TLS_SECRET="dd${SECRET}${FAKE_TLS_DOMAIN_HEX}"
+
+ensure_qrencode() {
+    if command -v qrencode >/dev/null 2>&1; then
+        return 0
+    fi
+
+    echo "未检测到 qrencode，正在安装本地二维码工具..."
+    if command -v apt-get >/dev/null 2>&1; then
+        apt-get update -qq && apt-get install -y qrencode -qq
+    else
+        echo "错误: 当前系统没有 apt-get，请手动安装 qrencode"
+        return 1
+    fi
+
+    command -v qrencode >/dev/null 2>&1
+}
+
+print_qrcode() {
+    local label="$1"
+    local url="$2"
+
+    if ensure_qrencode; then
+        echo "$label"
+        echo ""
+        qrencode -t ANSIUTF8 "$url"
+        echo ""
+    else
+        echo "无法生成二维码: 未安装 qrencode"
+        echo "已禁止在线二维码，避免泄露代理链接"
+        echo ""
+    fi
+}
 
 # 获取服务器 IPv4 和 IPv6
 SERVER_IP4=$(curl -4 -s ifconfig.me 2>/dev/null || curl -s api.ipify.org 2>/dev/null)
@@ -47,47 +49,28 @@ SERVER_IP6=$(curl -6 -s ifconfig.me 2>/dev/null)
 echo "=== Telegram 代理连接信息 ==="
 echo ""
 echo "端口: $PORT"
-echo "密钥: $SECRET"
+echo "原始密钥: 已隐藏"
+echo "Fake TLS 域名: $FAKE_TLS_DOMAIN"
 echo ""
 
 if [ ! -z "$SERVER_IP4" ]; then
-    PROXY_URL4="tg://proxy?server=$SERVER_IP4&port=$PORT&secret=$SECRET"
+    PROXY_URL4_FAKE_TLS="tg://proxy?server=$SERVER_IP4&port=$PORT&secret=$FAKE_TLS_SECRET"
     echo "IPv4 服务器: $SERVER_IP4"
-    echo "IPv4 连接链接:"
-    echo "$PROXY_URL4"
+    echo "IPv4 连接链接 (Fake TLS):"
+    echo "$PROXY_URL4_FAKE_TLS"
     echo ""
     
-    if command -v qrencode &> /dev/null; then
-        echo "IPv4 二维码:"
-        echo ""
-        qrencode -t ANSIUTF8 "$PROXY_URL4"
-        echo ""
-    else
-        ENCODED_URL4=$(url_encode "$PROXY_URL4")
-        echo "IPv4 在线二维码:"
-        echo "https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=$ENCODED_URL4"
-        echo ""
-    fi
+    print_qrcode "IPv4 二维码 (Fake TLS):" "$PROXY_URL4_FAKE_TLS"
 fi
 
 if [ ! -z "$SERVER_IP6" ]; then
-    PROXY_URL6="tg://proxy?server=$SERVER_IP6&port=$PORT&secret=$SECRET"
+    PROXY_URL6_FAKE_TLS="tg://proxy?server=$SERVER_IP6&port=$PORT&secret=$FAKE_TLS_SECRET"
     echo "IPv6 服务器: $SERVER_IP6"
-    echo "IPv6 连接链接:"
-    echo "$PROXY_URL6"
+    echo "IPv6 连接链接 (Fake TLS):"
+    echo "$PROXY_URL6_FAKE_TLS"
     echo ""
     
-    if command -v qrencode &> /dev/null; then
-        echo "IPv6 二维码:"
-        echo ""
-        qrencode -t ANSIUTF8 "$PROXY_URL6"
-        echo ""
-    else
-        ENCODED_URL6=$(url_encode "$PROXY_URL6")
-        echo "IPv6 在线二维码:"
-        echo "https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=$ENCODED_URL6"
-        echo ""
-    fi
+    print_qrcode "IPv6 二维码 (Fake TLS):" "$PROXY_URL6_FAKE_TLS"
 fi
 
 if [ -z "$SERVER_IP4" ] && [ -z "$SERVER_IP6" ]; then

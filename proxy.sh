@@ -1,277 +1,6 @@
 #!/bin/bash
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR" || exit 1
-
-
 # Telegram MTProto Proxy 一体化管理脚本
-
-require_docker() {
-    if ! command -v docker >/dev/null 2>&1; then
-        echo "错误: 未安装 Docker"
-        return 1
-    fi
-
-    if ! docker compose version >/dev/null 2>&1; then
-        echo "错误: 未检测到 docker compose，请先安装 Docker Compose 插件"
-        return 1
-    fi
-
-    if ! docker info >/dev/null 2>&1; then
-        echo "错误: Docker 服务未运行，请先启动 Docker"
-        return 1
-    fi
-
-    return 0
-}
-
-ensure_docker_or_return() {
-    if ! require_docker; then
-        echo ""
-        read -p "按回车键继续..."
-        return 1
-    fi
-}
-
-generate_secret() {
-    head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n'
-}
-
-is_port_free() {
-    local port="$1"
-    local pattern="(^|[:.])${port}$"
-
-    if command -v ss >/dev/null 2>&1; then
-        ! ss -ltn 2>/dev/null | awk '{print $4}' | grep -Eq "$pattern"
-    elif command -v netstat >/dev/null 2>&1; then
-        ! netstat -ltn 2>/dev/null | awk '{print $4}' | grep -Eq "$pattern"
-    else
-        return 0
-    fi
-}
-
-generate_port() {
-    local candidate
-    local raw
-    local i
-
-    for ((i=0; i<50; i++)); do
-        raw=$(od -An -N2 -tu2 /dev/urandom | tr -d ' ')
-        candidate=$((raw % 55536 + 10000))
-        if is_port_free "$candidate"; then
-            echo "$candidate"
-            return 0
-        fi
-    done
-
-    return 1
-}
-
-calc_ceil_rate() {
-    local rate="$1"
-    local normalized="${rate,,}"
-
-    if [[ "$normalized" =~ ^([0-9]+)(kbit|mbit|gbit)$ ]]; then
-        echo "$((BASH_REMATCH[1] * 2))${BASH_REMATCH[2]}"
-    else
-        echo "$rate"
-    fi
-}
-
-apply_traffic_limit() {
-    local rate="$1"
-    local port="$2"
-    local iface
-    local normalized_rate
-    local ceil_rate
-
-    if ! command -v ip >/dev/null 2>&1 || ! command -v tc >/dev/null 2>&1; then
-        echo "⚠️  未找到 ip/tc 命令，跳过流量限制"
-        return 1
-    fi
-
-    iface=$(ip -o link show | awk -F': ' '{print $2}' | grep -v '^lo$' | head -1)
-    if [ -z "$iface" ]; then
-        echo "⚠️  未找到可用网卡，跳过流量限制"
-        return 1
-    fi
-
-    normalized_rate="${rate,,}"
-    ceil_rate=$(calc_ceil_rate "$normalized_rate")
-    tc qdisc del dev "$iface" root 2>/dev/null
-    tc qdisc add dev "$iface" root handle 1: htb default 10 || return 1
-    tc class add dev "$iface" parent 1: classid 1:1 htb rate "$normalized_rate" ceil "$ceil_rate" || return 1
-    tc filter add dev "$iface" protocol ip parent 1:0 prio 1 u32 match ip dport "$port" 0xffff flowid 1:1 || return 1
-
-    echo "✅ 流量限制已设置: $normalized_rate (接口: $iface)"
-}
-
-is_valid_rate() {
-    local rate="${1,,}"
-    [[ "$rate" =~ ^[0-9]+(kbit|mbit|gbit)$ ]]
-}
-
-sanitize_rate() {
-    echo "${1,,}"
-}
-
-url_encode() {
-    local raw="$1"
-    echo -n "$raw" | jq -sRr @uri 2>/dev/null || \
-    python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.stdin.read().strip()))" <<< "$raw" 2>/dev/null || \
-    echo "$raw"
-}
-
-load_env_config() {
-    local env_file="${1:-.env}"
-    local key value
-
-    if [ ! -f "$env_file" ]; then
-        echo "错误: 未找到配置文件 $env_file"
-        return 1
-    fi
-
-    PORT=""
-    SECRET=""
-    USE_NGINX="n"
-    USE_LIMIT="n"
-    LIMIT_RATE=""
-    USE_ALERT="n"
-    USE_STATS="n"
-
-    while IFS='=' read -r key value; do
-        key=$(echo "$key" | tr -d ' \t\r')
-        value=$(echo "$value" | tr -d '\r')
-        value="${value%\"}"
-        value="${value#\"}"
-
-        case "$key" in
-            PORT|SECRET|USE_NGINX|USE_LIMIT|LIMIT_RATE|USE_ALERT|USE_STATS)
-                printf -v "$key" '%s' "$value"
-                ;;
-        esac
-    done < "$env_file"
-
-    if ! [[ "$PORT" =~ ^[0-9]+$ ]]; then
-        echo "错误: 配置文件中的 PORT 无效"
-        return 1
-    fi
-
-    if ! [[ "$SECRET" =~ ^[0-9a-fA-F]{32}$ ]]; then
-        echo "错误: 配置文件中的 SECRET 无效"
-        return 1
-    fi
-
-    if [ "$USE_LIMIT" = "y" ] && [ -n "$LIMIT_RATE" ]; then
-        LIMIT_RATE=$(sanitize_rate "$LIMIT_RATE")
-        if ! is_valid_rate "$LIMIT_RATE"; then
-            echo "错误: 配置文件中的 LIMIT_RATE 无效"
-            return 1
-        fi
-    fi
-
-    return 0
-}
-
-is_valid_ipv4() {
-    local ip="$1"
-    local IFS='.'
-    local octets
-    local octet
-
-    [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
-    read -r -a octets <<< "$ip"
-    [ "${#octets[@]}" -eq 4 ] || return 1
-
-    for octet in "${octets[@]}"; do
-        if [ "$octet" -gt 255 ]; then
-            return 1
-        fi
-    done
-
-    return 0
-}
-
-is_valid_cidr() {
-    local cidr="$1"
-    local ip="${cidr%/*}"
-    local prefix="${cidr#*/}"
-
-    [ "$cidr" != "$ip" ] || return 1
-    is_valid_ipv4 "$ip" || return 1
-    [[ "$prefix" =~ ^[0-9]+$ ]] || return 1
-    [ "$prefix" -ge 0 ] && [ "$prefix" -le 32 ]
-}
-
-ensure_whitelist_drop_rule() {
-    local port="$1"
-
-    if iptables -C INPUT -p tcp --dport "$port" -m comment --comment "telegram-proxy-drop" -j DROP 2>/dev/null; then
-        return 0
-    fi
-
-    iptables -A INPUT -p tcp --dport "$port" -m comment --comment "telegram-proxy-drop" -j DROP
-}
-
-show_self_check() {
-    echo ""
-    echo "=== 环境自检 ==="
-    echo ""
-
-    if command -v docker >/dev/null 2>&1; then
-        echo "Docker: ✅ 已安装"
-    else
-        echo "Docker: ❌ 未安装"
-    fi
-
-    if command -v docker >/dev/null 2>&1; then
-        if docker compose version >/dev/null 2>&1; then
-            echo "Docker Compose: ✅ 可用"
-        else
-            echo "Docker Compose: ❌ 不可用"
-        fi
-
-        if docker info >/dev/null 2>&1; then
-            echo "Docker Daemon: ✅ 运行中"
-        else
-            echo "Docker Daemon: ❌ 未运行/无权限"
-        fi
-    else
-        echo "Docker Compose: ❌ 不可用"
-        echo "Docker Daemon: ❌ 未运行/无权限"
-    fi
-
-    if [ -f .env ] && load_env_config .env >/dev/null 2>&1; then
-        echo ".env 配置: ✅ 有效 (PORT=$PORT)"
-    elif [ -f .env ]; then
-        echo ".env 配置: ❌ 存在但无效"
-    else
-        echo ".env 配置: ⚠️ 未找到"
-    fi
-
-    if [ -f docker-compose.yml ]; then
-        echo "docker-compose.yml: ✅ 存在"
-    else
-        echo "docker-compose.yml: ⚠️ 未找到"
-    fi
-
-    if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' | grep -q "^telegram-mtproto-proxy$"; then
-        echo "代理容器: ✅ 运行中"
-    else
-        echo "代理容器: ⚠️ 未运行"
-    fi
-
-    for cmd in curl iptables tc crontab systemctl; do
-        if command -v "$cmd" >/dev/null 2>&1; then
-            echo "$cmd: ✅ 可用"
-        else
-            echo "$cmd: ⚠️ 不可用"
-        fi
-    done
-
-    echo ""
-    read -p "按回车键继续..."
-}
 
 show_menu() {
     clear
@@ -294,9 +23,9 @@ show_menu() {
     echo "13) 恢复配置"
     echo "14) 更新镜像"
     echo "15) IP 白名单"
-    echo "16) 开机自启"
-    echo "17) 完全卸载"
-    echo "18) 环境自检"
+    echo "16) 流量限量"
+    echo "17) 开机自启"
+    echo "18) 完全卸载"
     echo "0) 退出"
     echo ""
     echo -n "请选择 [0-18]: "
@@ -304,20 +33,23 @@ show_menu() {
 
 start_proxy() {
     echo ""
-
-    ensure_docker_or_return || return
+    
+    # 检查 xxd 命令
+    if ! command -v xxd &> /dev/null; then
+        echo "⚠️  缺少 xxd 命令，正在安装..."
+        apt-get update -qq && apt-get install -y xxd -qq
+        echo "✅ xxd 已安装"
+        echo ""
+    fi
     
     # 检测是否已启动
-    if [ -f .env ] && docker ps --format '{{.Names}}' | grep -q "^telegram-mtproto-proxy$"; then
+    if [ -f .env ] && docker ps | grep -q telegram-mtproto-proxy; then
         echo "⚠️  检测到代理已在运行"
         echo ""
-        if ! load_env_config .env; then
-            read -p "按回车键继续..."
-            return
-        fi
+        source .env
         echo "当前配置："
         echo "- 端口: $PORT"
-        echo "- 密钥: $SECRET"
+        echo "- 原始密钥: 已隐藏"
         echo ""
         read -p "是否重新配置? 将停止当前服务 (y/n): " RECONFIG
         
@@ -335,33 +67,16 @@ start_proxy() {
     echo "=== 启动代理配置 ==="
     echo ""
     
-    SECRET=$(generate_secret)
-    PORT=$(generate_port)
-    if [ -z "$PORT" ]; then
-        echo "错误: 无法找到空闲端口，请稍后重试"
-        read -p "按回车键继续..."
-        return
-    fi
+    SECRET=$(head -c 16 /dev/urandom | xxd -ps)
+    PORT=$((RANDOM % 55535 + 10000))
     
-    echo "生成的密钥: $SECRET"
+    echo "已生成新密钥"
     echo "生成的端口: $PORT"
     echo ""
     
-    read -p "是否启用 Nginx 伪装? (y/n, 默认 n): " USE_NGINX
-    USE_NGINX=${USE_NGINX:-n}
-    
-    read -p "是否设置流量限制? (y/n, 默认 n): " USE_LIMIT
-    USE_LIMIT=${USE_LIMIT:-n}
-    
-    if [ "$USE_LIMIT" = "y" ]; then
-        read -p "输入限制速率 (默认 10mbit): " LIMIT_RATE
-        LIMIT_RATE=${LIMIT_RATE:-10mbit}
-        LIMIT_RATE=$(sanitize_rate "$LIMIT_RATE")
-        if ! is_valid_rate "$LIMIT_RATE"; then
-            echo "⚠️  限速格式无效，已使用默认值 10mbit"
-            LIMIT_RATE="10mbit"
-        fi
-    fi
+    USE_QUOTA=y
+    QUOTA_LIMIT_GB=30
+    QUOTA_RESET_DAY=1
     
     read -p "是否启用告警监控? (y/n, 默认 n): " USE_ALERT
     USE_ALERT=${USE_ALERT:-n}
@@ -372,94 +87,7 @@ start_proxy() {
     echo ""
     echo "正在配置..."
     
-    if [ "$USE_NGINX" = "y" ]; then
-        cat > nginx-runtime.conf <<'NGINX_EOF'
-upstream mtproxy {
-    server mtproto-proxy:443;
-}
-
-server {
-    listen 80;
-    server_name _;
-    
-    location / {
-        root /usr/share/nginx/html;
-        index index.html;
-    }
-}
-
-server {
-    listen PORT_PLACEHOLDER;
-    server_name _;
-    
-    location / {
-        proxy_pass http://mtproxy;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-}
-NGINX_EOF
-        sed -i "s/PORT_PLACEHOLDER/$PORT/g" nginx-runtime.conf
-        
-        cat > docker-compose.yml <<EOF
-services:
-  mtproto-proxy:
-    image: telegrammessenger/proxy:latest
-    container_name: telegram-mtproto-proxy
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:8443:443"
-    environment:
-      - SECRET=$SECRET
-    volumes:
-      - ./config:/data
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-    networks:
-      - proxy-net
-
-  nginx:
-    image: nginx:alpine
-    container_name: telegram-nginx
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "$PORT:$PORT"
-    volumes:
-      - ./index.html:/usr/share/nginx/html/index.html:ro
-      - ./nginx-runtime.conf:/etc/nginx/conf.d/default.conf:ro
-    depends_on:
-      - mtproto-proxy
-    networks:
-      - proxy-net
-
-networks:
-  proxy-net:
-    driver: bridge
-EOF
-        
-        [ ! -f index.html ] && cat > index.html <<'HTML_EOF'
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>Welcome</title>
-    <style>
-        body { font-family: Arial; text-align: center; padding: 50px; }
-        h1 { color: #333; }
-    </style>
-</head>
-<body>
-    <h1>Welcome</h1>
-    <p>This is a personal website.</p>
-</body>
-</html>
-HTML_EOF
-    else
-        cat > docker-compose.yml <<EOF
+    cat > docker-compose.yml <<EOF
 services:
   mtproto-proxy:
     image: telegrammessenger/proxy:latest
@@ -477,21 +105,14 @@ services:
         max-size: "10m"
         max-file: "3"
 EOF
-    fi
     
-    mkdir -p config
-
-    if ! docker compose up -d; then
-        echo "❌ 启动失败，请检查日志: docker compose logs --tail 100"
-        read -p "按回车键继续..."
-        return
-    fi
+    docker compose up -d
     
-    if [ "$USE_LIMIT" = "y" ]; then
-        echo ""
-        echo "设置流量限制..."
-        apply_traffic_limit "$LIMIT_RATE" "$PORT" || echo "⚠️  流量限制设置失败，请检查 tc 参数"
-    fi
+    echo ""
+    echo "设置月度流量限量..."
+    (crontab -l 2>/dev/null | grep -v "quota.sh"; echo "*/5 * * * * $(pwd)/quota.sh >> /dev/null 2>&1") | crontab -
+    ./quota.sh >/dev/null 2>&1
+    echo "✅ 月度流量限量已启用: ${QUOTA_LIMIT_GB}GiB，每月 ${QUOTA_RESET_DAY} 号刷新"
     
     if [ "$USE_ALERT" = "y" ]; then
         echo ""
@@ -510,9 +131,10 @@ EOF
     cat > .env <<EOF
 PORT=$PORT
 SECRET=$SECRET
-USE_NGINX=$USE_NGINX
-USE_LIMIT=$USE_LIMIT
-LIMIT_RATE=$LIMIT_RATE
+FAKE_TLS_DOMAIN=www.microsoft.com
+USE_QUOTA=$USE_QUOTA
+QUOTA_LIMIT_GB=$QUOTA_LIMIT_GB
+QUOTA_RESET_DAY=$QUOTA_RESET_DAY
 USE_ALERT=$USE_ALERT
 USE_STATS=$USE_STATS
 EOF
@@ -522,14 +144,14 @@ EOF
     echo ""
     echo "连接信息："
     echo "- 端口: $PORT"
-    echo "- 密钥: $SECRET"
+    echo "- 原始密钥: 已隐藏"
+    echo "- 运行 ./qrcode.sh 查看 Fake TLS 连接链接"
     echo ""
     read -p "按回车键继续..."
 }
 
 stop_proxy() {
     echo ""
-    ensure_docker_or_return || return
     echo "正在停止代理..."
     docker compose stop
     echo "✅ 代理已停止"
@@ -538,7 +160,6 @@ stop_proxy() {
 
 restart_proxy() {
     echo ""
-    ensure_docker_or_return || return
     echo "正在重启代理..."
     docker compose restart
     echo "✅ 代理已重启"
@@ -547,7 +168,6 @@ restart_proxy() {
 
 show_status() {
     echo ""
-    ensure_docker_or_return || return
     echo "=== 代理状态 ==="
     docker compose ps
     echo ""
@@ -562,10 +182,42 @@ show_qrcode() {
         return
     fi
     
-    if ! load_env_config .env; then
-        read -p "按回车键继续..."
-        return
-    fi
+    source .env
+    FAKE_TLS_DOMAIN=${FAKE_TLS_DOMAIN:-www.microsoft.com}
+    FAKE_TLS_DOMAIN_HEX=$(printf "%s" "$FAKE_TLS_DOMAIN" | xxd -ps -c 256)
+    FAKE_TLS_SECRET="dd${SECRET}${FAKE_TLS_DOMAIN_HEX}"
+
+    ensure_qrencode() {
+        if command -v qrencode >/dev/null 2>&1; then
+            return 0
+        fi
+
+        echo "未检测到 qrencode，正在安装本地二维码工具..."
+        if command -v apt-get >/dev/null 2>&1; then
+            apt-get update -qq && apt-get install -y qrencode -qq
+        else
+            echo "错误: 当前系统没有 apt-get，请手动安装 qrencode"
+            return 1
+        fi
+
+        command -v qrencode >/dev/null 2>&1
+    }
+
+    print_qrcode() {
+        local label="$1"
+        local url="$2"
+
+        if ensure_qrencode; then
+            echo "$label"
+            qrencode -t ANSIUTF8 "$url"
+            echo ""
+        else
+            echo "无法生成二维码: 未安装 qrencode"
+            echo "已禁止在线二维码，避免泄露代理链接"
+            echo ""
+        fi
+    }
+
     SERVER_IP4=$(curl -4 -s ifconfig.me 2>/dev/null || curl -s api.ipify.org 2>/dev/null)
     SERVER_IP6=$(curl -6 -s ifconfig.me 2>/dev/null)
     
@@ -573,52 +225,34 @@ show_qrcode() {
     echo "=== 连接信息 ==="
     echo ""
     echo "端口: $PORT"
-    echo "密钥: $SECRET"
+    echo "原始密钥: 已隐藏"
+    echo "Fake TLS 域名: $FAKE_TLS_DOMAIN"
     echo ""
     
     if [ ! -z "$SERVER_IP4" ]; then
         echo "IPv4 服务器: $SERVER_IP4"
-        PROXY_URL4="tg://proxy?server=$SERVER_IP4&port=$PORT&secret=$SECRET"
-        echo "IPv4 连接链接:"
-        echo "$PROXY_URL4"
+        PROXY_URL4_FAKE_TLS="tg://proxy?server=$SERVER_IP4&port=$PORT&secret=$FAKE_TLS_SECRET"
+        echo "IPv4 连接链接 (Fake TLS):"
+        echo "$PROXY_URL4_FAKE_TLS"
         echo ""
         
-        if command -v qrencode &> /dev/null; then
-            echo "IPv4 二维码:"
-            qrencode -t ANSIUTF8 "$PROXY_URL4"
-            echo ""
-        else
-            ENCODED_URL4=$(url_encode "$PROXY_URL4")
-            echo "IPv4 在线二维码:"
-            echo "https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=$ENCODED_URL4"
-            echo ""
-        fi
+        print_qrcode "IPv4 二维码 (Fake TLS):" "$PROXY_URL4_FAKE_TLS"
     fi
     
     if [ ! -z "$SERVER_IP6" ]; then
         echo "IPv6 服务器: $SERVER_IP6"
-        PROXY_URL6="tg://proxy?server=$SERVER_IP6&port=$PORT&secret=$SECRET"
-        echo "IPv6 连接链接:"
-        echo "$PROXY_URL6"
+        PROXY_URL6_FAKE_TLS="tg://proxy?server=$SERVER_IP6&port=$PORT&secret=$FAKE_TLS_SECRET"
+        echo "IPv6 连接链接 (Fake TLS):"
+        echo "$PROXY_URL6_FAKE_TLS"
         echo ""
         
-        if command -v qrencode &> /dev/null; then
-            echo "IPv6 二维码:"
-            qrencode -t ANSIUTF8 "$PROXY_URL6"
-        else
-            ENCODED_URL6=$(url_encode "$PROXY_URL6")
-            echo "IPv6 在线二维码:"
-            echo "https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=$ENCODED_URL6"
-        fi
-        echo ""
+        print_qrcode "IPv6 二维码 (Fake TLS):" "$PROXY_URL6_FAKE_TLS"
     fi
     read -p "按回车键继续..."
 }
 
 show_monitor() {
-    ensure_docker_or_return || return
-
-    if ! docker ps --format '{{.Names}}' | grep -q "^telegram-mtproto-proxy$"; then
+    if ! docker ps | grep -q telegram-mtproto-proxy; then
         echo ""
         echo "错误: 容器未运行"
         read -p "按回车键继续..."
@@ -632,9 +266,7 @@ show_monitor() {
 }
 
 show_stats() {
-    ensure_docker_or_return || return
-
-    if ! docker ps --format '{{.Names}}' | grep -q "^telegram-mtproto-proxy$"; then
+    if ! docker ps | grep -q telegram-mtproto-proxy; then
         echo ""
         echo "错误: 容器未运行"
         read -p "按回车键继续..."
@@ -651,11 +283,7 @@ show_stats() {
     echo ""
     PORT=$(docker port telegram-mtproto-proxy 443 2>/dev/null | cut -d: -f2)
     if [ ! -z "$PORT" ]; then
-        if command -v ss >/dev/null 2>&1; then
-            CONNECTIONS=$(ss -tan 2>/dev/null | awk -v port=":$PORT" '$1 == "ESTAB" && $4 ~ port"$" {count++} END {print count+0}')
-        else
-            CONNECTIONS=$(netstat -an 2>/dev/null | grep ":$PORT" | grep ESTABLISHED | wc -l)
-        fi
+        CONNECTIONS=$(netstat -an 2>/dev/null | grep ":$PORT" | grep ESTABLISHED | wc -l)
         echo "当前活跃连接数: $CONNECTIONS"
         echo "端口: $PORT"
     fi
@@ -696,15 +324,12 @@ show_report() {
 
 show_logs() {
     echo ""
-    ensure_docker_or_return || return
     echo "=== 代理日志 (按 Ctrl+C 返回菜单) ==="
     echo ""
     docker compose logs -f
 }
 
 change_secret() {
-    ensure_docker_or_return || return
-
     if [ ! -f .env ]; then
         echo ""
         echo "错误: 代理未启动"
@@ -716,12 +341,9 @@ change_secret() {
     echo "=== 更换密钥 ==="
     echo ""
     
-    if ! load_env_config .env; then
-        read -p "按回车键继续..."
-        return
-    fi
+    source .env
     OLD_SECRET=$SECRET
-    NEW_SECRET=$(generate_secret)
+    NEW_SECRET=$(head -c 16 /dev/urandom | xxd -ps)
     
     echo "当前密钥: $OLD_SECRET"
     echo "新密钥: $NEW_SECRET"
@@ -735,7 +357,7 @@ change_secret() {
     fi
     
     # 更新配置文件
-    sed -i -E "s/^SECRET=${OLD_SECRET}$/SECRET=${NEW_SECRET}/" .env
+    sed -i "s/SECRET=$OLD_SECRET/SECRET=$NEW_SECRET/" .env
     sed -i "s/SECRET=$OLD_SECRET/SECRET=$NEW_SECRET/" docker-compose.yml
     
     # 重启服务
@@ -749,8 +371,6 @@ change_secret() {
 }
 
 change_port() {
-    ensure_docker_or_return || return
-
     if [ ! -f .env ]; then
         echo ""
         echo "错误: 代理未启动"
@@ -762,20 +382,9 @@ change_port() {
     echo "=== 更换端口 ==="
     echo ""
     
-    if ! load_env_config .env; then
-        read -p "按回车键继续..."
-        return
-    fi
+    source .env
     OLD_PORT=$PORT
-    NEW_PORT=""
-    while [ -z "$NEW_PORT" ] || [ "$NEW_PORT" = "$OLD_PORT" ]; do
-        NEW_PORT=$(generate_port)
-        if [ -z "$NEW_PORT" ]; then
-            echo "错误: 无法找到可用的新端口"
-            read -p "按回车键继续..."
-            return
-        fi
-    done
+    NEW_PORT=$((RANDOM % 55535 + 10000))
     
     echo "当前端口: $OLD_PORT"
     echo "新端口: $NEW_PORT"
@@ -789,24 +398,12 @@ change_port() {
     fi
     
     # 更新配置文件
-    sed -i -E "s/^PORT=${OLD_PORT}$/PORT=${NEW_PORT}/" .env
-    sed -i -E \
-        -e "s/\"${OLD_PORT}:443\"/\"${NEW_PORT}:443\"/g" \
-        -e "s/\"${OLD_PORT}:${OLD_PORT}\"/\"${NEW_PORT}:${NEW_PORT}\"/g" \
-        docker-compose.yml
-    
-    if [ -f nginx-runtime.conf ]; then
-        sed -i -E "s/listen ${OLD_PORT};/listen ${NEW_PORT};/g" nginx-runtime.conf
-    fi
-    
-    # 更新流量限制
-    if [ "$USE_LIMIT" = "y" ] && [ ! -z "$LIMIT_RATE" ]; then
-        LIMIT_RATE=$(sanitize_rate "$LIMIT_RATE")
-        apply_traffic_limit "$LIMIT_RATE" "$NEW_PORT" || echo "⚠️  流量限制更新失败，请检查 tc 参数"
-    fi
+    sed -i "s/PORT=$OLD_PORT/PORT=$NEW_PORT/" .env
+    sed -i "s/$OLD_PORT/$NEW_PORT/g" docker-compose.yml
     
     # 重启服务
     docker compose up -d --force-recreate
+    ./quota.sh >/dev/null 2>&1
     
     echo ""
     echo "✅ 端口已更换！"
@@ -828,22 +425,14 @@ backup_config() {
     echo ""
     
     BACKUP_FILE="telegram-proxy-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
-    BACKUP_ITEMS=(.env docker-compose.yml config/)
-    [ -f nginx-runtime.conf ] && BACKUP_ITEMS+=(nginx-runtime.conf)
-    [ -f index.html ] && BACKUP_ITEMS+=(index.html)
-
-    if ! tar -czf "$BACKUP_FILE" "${BACKUP_ITEMS[@]}"; then
-        echo "❌ 备份失败"
-        read -p "按回车键继续..."
-        return
-    fi
+    
+    tar -czf "$BACKUP_FILE" .env docker-compose.yml config/ 2>/dev/null
     
     echo "✅ 配置已备份到: $BACKUP_FILE"
     echo ""
     echo "备份包含:"
     echo "- 配置文件 (.env)"
     echo "- Docker 配置 (docker-compose.yml)"
-    echo "- Nginx 配置 (如果有)"
     echo "- 数据目录 (config/)"
     echo ""
     read -p "按回车键继续..."
@@ -851,7 +440,6 @@ backup_config() {
 
 restore_config() {
     echo ""
-    ensure_docker_or_return || return
     echo "=== 恢复配置 ==="
     echo ""
     
@@ -880,18 +468,10 @@ restore_config() {
     docker compose down 2>/dev/null
     
     # 恢复备份
-    if ! tar -xzf "$BACKUP_FILE"; then
-        echo "❌ 恢复失败，备份文件可能损坏"
-        read -p "按回车键继续..."
-        return
-    fi
-
+    tar -xzf "$BACKUP_FILE"
+    
     # 启动服务
-    if ! docker compose up -d; then
-        echo "❌ 恢复后启动失败，请检查: docker compose logs --tail 100"
-        read -p "按回车键继续..."
-        return
-    fi
+    docker compose up -d
     
     echo ""
     echo "✅ 配置已恢复！"
@@ -901,7 +481,6 @@ restore_config() {
 
 update_image() {
     echo ""
-    ensure_docker_or_return || return
     echo "=== 更新 Docker 镜像 ==="
     echo ""
     
@@ -928,13 +507,6 @@ update_image() {
 }
 
 manage_whitelist() {
-    if ! command -v iptables >/dev/null 2>&1; then
-        echo ""
-        echo "错误: 未找到 iptables 命令"
-        read -p "按回车键继续..."
-        return
-    fi
-
     echo ""
     echo "=== IP 白名单管理 ==="
     echo ""
@@ -960,25 +532,16 @@ manage_whitelist() {
                 echo ""
                 echo "错误: 代理未启动"
             else
-                if ! load_env_config .env; then
-                    echo "错误: 配置文件无效"
-                    echo ""
-                    read -p "按回车键继续..."
-                    return
-                fi
+                source .env
                 echo ""
                 read -p "输入允许的 IP 地址: " ALLOW_IP
-                if ! is_valid_ipv4 "$ALLOW_IP"; then
-                    echo "❌ IP 格式无效"
-                elif iptables -I INPUT -p tcp --dport "$PORT" -s "$ALLOW_IP" -m comment --comment "telegram-proxy" -j ACCEPT; then
-                    echo "✅ 已添加 IP: $ALLOW_IP"
-                    if ensure_whitelist_drop_rule "$PORT"; then
-                        echo "✅ 已启用白名单模式（其他 IP 将被拒绝）"
-                    else
-                        echo "⚠️  添加默认拒绝规则失败，请手动检查 iptables"
-                    fi
-                else
-                    echo "❌ 添加失败"
+                iptables -I INPUT -p tcp --dport $PORT -s $ALLOW_IP -m comment --comment "telegram-proxy" -j ACCEPT
+                echo "✅ 已添加 IP: $ALLOW_IP"
+                
+                # 如果是第一条规则，添加默认拒绝
+                if [ $(iptables -L INPUT -n | grep "telegram-proxy" | wc -l) -eq 1 ]; then
+                    iptables -A INPUT -p tcp --dport $PORT -m comment --comment "telegram-proxy-drop" -j DROP
+                    echo "✅ 已启用白名单模式（其他 IP 将被拒绝）"
                 fi
             fi
             ;;
@@ -987,12 +550,7 @@ manage_whitelist() {
                 echo ""
                 echo "错误: 代理未启动"
             else
-                if ! load_env_config .env; then
-                    echo "错误: 配置文件无效"
-                    echo ""
-                    read -p "按回车键继续..."
-                    return
-                fi
+                source .env
                 echo ""
                 echo "常用运营商 IP 段示例:"
                 echo "- 中国移动: 120.0.0.0/8"
@@ -1000,17 +558,13 @@ manage_whitelist() {
                 echo "- 中国电信: 117.0.0.0/8"
                 echo ""
                 read -p "输入 IP 段 (CIDR 格式，如 192.168.1.0/24): " ALLOW_CIDR
-                if ! is_valid_cidr "$ALLOW_CIDR"; then
-                    echo "❌ CIDR 格式无效"
-                elif iptables -I INPUT -p tcp --dport "$PORT" -s "$ALLOW_CIDR" -m comment --comment "telegram-proxy" -j ACCEPT; then
-                    echo "✅ 已添加 IP 段: $ALLOW_CIDR"
-                    if ensure_whitelist_drop_rule "$PORT"; then
-                        echo "✅ 已启用白名单模式（其他 IP 将被拒绝）"
-                    else
-                        echo "⚠️  添加默认拒绝规则失败，请手动检查 iptables"
-                    fi
-                else
-                    echo "❌ 添加失败"
+                iptables -I INPUT -p tcp --dport $PORT -s $ALLOW_CIDR -m comment --comment "telegram-proxy" -j ACCEPT
+                echo "✅ 已添加 IP 段: $ALLOW_CIDR"
+                
+                # 如果是第一条规则，添加默认拒绝
+                if [ $(iptables -L INPUT -n | grep "telegram-proxy" | wc -l) -eq 1 ]; then
+                    iptables -A INPUT -p tcp --dport $PORT -m comment --comment "telegram-proxy-drop" -j DROP
+                    echo "✅ 已启用白名单模式（其他 IP 将被拒绝）"
                 fi
             fi
             ;;
@@ -1019,12 +573,7 @@ manage_whitelist() {
                 echo ""
                 echo "错误: 代理未启动"
             else
-                if ! load_env_config .env; then
-                    echo "错误: 配置文件无效"
-                    echo ""
-                    read -p "按回车键继续..."
-                    return
-                fi
+                source .env
                 echo ""
                 echo "检测当前连接的 IP..."
                 CURRENT_IP=$(who am i | awk '{print $5}' | tr -d '()')
@@ -1041,17 +590,13 @@ manage_whitelist() {
                 read -p "确认添加? (y/n): " CONFIRM
                 
                 if [ "$CONFIRM" = "y" ]; then
-                    if ! is_valid_ipv4 "$CURRENT_IP"; then
-                        echo "❌ IP 格式无效"
-                    elif iptables -I INPUT -p tcp --dport "$PORT" -s "$CURRENT_IP" -m comment --comment "telegram-proxy" -j ACCEPT; then
-                        echo "✅ 已添加当前 IP: $CURRENT_IP"
-                        if ensure_whitelist_drop_rule "$PORT"; then
-                            echo "✅ 已启用白名单模式（其他 IP 将被拒绝）"
-                        else
-                            echo "⚠️  添加默认拒绝规则失败，请手动检查 iptables"
-                        fi
-                    else
-                        echo "❌ 添加失败"
+                    iptables -I INPUT -p tcp --dport $PORT -s $CURRENT_IP -m comment --comment "telegram-proxy" -j ACCEPT
+                    echo "✅ 已添加当前 IP: $CURRENT_IP"
+                    
+                    # 如果是第一条规则，添加默认拒绝
+                    if [ $(iptables -L INPUT -n | grep "telegram-proxy" | wc -l) -eq 1 ]; then
+                        iptables -A INPUT -p tcp --dport $PORT -m comment --comment "telegram-proxy-drop" -j DROP
+                        echo "✅ 已启用白名单模式（其他 IP 将被拒绝）"
                     fi
                 fi
             fi
@@ -1062,11 +607,7 @@ manage_whitelist() {
             iptables -L INPUT -n --line-numbers | grep -E "telegram-proxy|^num"
             echo ""
             read -p "输入要删除的规则编号: " LINE_NUM
-            if [[ ! "$LINE_NUM" =~ ^[0-9]+$ ]]; then
-                echo "❌ 规则编号无效"
-            else
-                iptables -D INPUT "$LINE_NUM" 2>/dev/null && echo "✅ 已删除规则" || echo "❌ 删除失败"
-            fi
+            iptables -D INPUT $LINE_NUM 2>/dev/null && echo "✅ 已删除规则" || echo "❌ 删除失败"
             ;;
         6)
             echo ""
@@ -1088,6 +629,94 @@ manage_whitelist() {
             ;;
     esac
     
+    echo ""
+    read -p "按回车键继续..."
+}
+
+manage_quota() {
+    echo ""
+    echo "=== 流量限量管理 ==="
+    echo ""
+
+    if [ ! -f .env ]; then
+        echo "错误: 代理未启动"
+        read -p "按回车键继续..."
+        return
+    fi
+
+    source .env
+    USE_QUOTA=${USE_QUOTA:-y}
+    QUOTA_LIMIT_GB=${QUOTA_LIMIT_GB:-30}
+    QUOTA_RESET_DAY=${QUOTA_RESET_DAY:-1}
+
+    echo "当前状态:"
+    echo "- 启用: $USE_QUOTA"
+    echo "- 月度限量: ${QUOTA_LIMIT_GB}GiB"
+    echo "- 刷新日期: 每月 ${QUOTA_RESET_DAY} 号"
+    if [ -f ./config/quota.state ]; then
+        source ./config/quota.state
+        echo "- 计费周期: ${PERIOD:-unknown}"
+        echo "- 超量停止标记: ${STOPPED_BY_QUOTA:-0}"
+    fi
+    echo ""
+    echo "1) 查看限量统计"
+    echo "2) 启用限量"
+    echo "3) 关闭限量"
+    echo "4) 修改月度限量"
+    echo "5) 修改刷新日期"
+    echo "6) 手动重置本月基线"
+    echo "0) 返回"
+    echo ""
+    read -p "请选择: " choice
+
+    case $choice in
+        1)
+            ./quota.sh
+            ;;
+        2)
+            sed -i "s/^USE_QUOTA=.*/USE_QUOTA=y/" .env
+            (crontab -l 2>/dev/null | grep -v "quota.sh"; echo "*/5 * * * * $(pwd)/quota.sh >> /dev/null 2>&1") | crontab -
+            ./quota.sh reset >/dev/null 2>&1
+            echo "✅ 流量限量已启用"
+            ;;
+        3)
+            sed -i "s/^USE_QUOTA=.*/USE_QUOTA=n/" .env
+            crontab -l 2>/dev/null | grep -v "quota.sh" | crontab - 2>/dev/null
+            if [ "${STOPPED_BY_QUOTA:-0}" = "1" ]; then
+                docker compose up -d
+            fi
+            echo "✅ 流量限量已关闭"
+            ;;
+        4)
+            read -p "输入新的月度限量 GiB (当前 ${QUOTA_LIMIT_GB}): " NEW_LIMIT
+            if echo "$NEW_LIMIT" | grep -Eq '^[1-9][0-9]*$'; then
+                sed -i "s/^QUOTA_LIMIT_GB=.*/QUOTA_LIMIT_GB=$NEW_LIMIT/" .env
+                ./quota.sh reset >/dev/null 2>&1
+                echo "✅ 月度限量已修改为 ${NEW_LIMIT}GiB，并已重置本月基线"
+            else
+                echo "❌ 输入无效"
+            fi
+            ;;
+        5)
+            read -p "输入刷新日期 1-28 (当前 ${QUOTA_RESET_DAY}): " NEW_DAY
+            if echo "$NEW_DAY" | grep -Eq '^[0-9]+$' && [ "$NEW_DAY" -ge 1 ] && [ "$NEW_DAY" -le 28 ]; then
+                sed -i "s/^QUOTA_RESET_DAY=.*/QUOTA_RESET_DAY=$NEW_DAY/" .env
+                echo "✅ 刷新日期已修改为每月 ${NEW_DAY} 号"
+            else
+                echo "❌ 输入无效，请输入 1-28"
+            fi
+            ;;
+        6)
+            ./quota.sh reset
+            ;;
+        0)
+            return
+            ;;
+        *)
+            echo "无效选择"
+            ;;
+    esac
+
     echo ""
     read -p "按回车键继续..."
 }
@@ -1182,15 +811,12 @@ uninstall() {
     systemctl daemon-reload
     
     docker compose down -v 2>/dev/null
-    docker rm -f telegram-mtproto-proxy telegram-nginx 2>/dev/null
+    docker rm -f telegram-mtproto-proxy 2>/dev/null
     
-    IFACE=$(ip -o link show | awk -F': ' '{print $2}' | grep -v lo | head -1)
-    tc qdisc del dev $IFACE root 2>/dev/null
-    
-    crontab -l 2>/dev/null | grep -v "alert.sh" | grep -v "report.sh" | crontab - 2>/dev/null
+    crontab -l 2>/dev/null | grep -v "alert.sh" | grep -v "report.sh" | grep -v "quota.sh" | crontab - 2>/dev/null
     
     rm -rf config/
-    rm -f .env docker-compose.yml nginx-runtime.conf
+    rm -f .env docker-compose.yml
     rm -f /tmp/telegram-proxy-alert.log
     
     echo ""
@@ -1219,9 +845,9 @@ while true; do
         13) restore_config ;;
         14) update_image ;;
         15) manage_whitelist ;;
-        16) manage_autostart ;;
-        17) uninstall ;;
-        18) show_self_check ;;
+        16) manage_quota ;;
+        17) manage_autostart ;;
+        18) uninstall ;;
         0) echo ""; echo "再见！"; exit 0 ;;
         *) echo ""; echo "无效选择"; sleep 1 ;;
     esac
