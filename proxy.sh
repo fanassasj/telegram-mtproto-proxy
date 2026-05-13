@@ -15,20 +15,21 @@ show_menu() {
     echo "5) 查看连接信息/二维码"
     echo "6) 实时监控"
     echo "7) 流量统计"
-    echo "8) 使用报告"
-    echo "9) 查看日志"
-    echo "10) 更换密钥"
-    echo "11) 更换端口"
-    echo "12) 备份配置"
-    echo "13) 恢复配置"
-    echo "14) 更新镜像"
-    echo "15) IP 白名单"
-    echo "16) 流量限量"
-    echo "17) 开机自启"
-    echo "18) 完全卸载"
+    echo "8) 健康检查"
+    echo "9) 使用报告"
+    echo "10) 查看日志"
+    echo "11) 更换密钥"
+    echo "12) 更换端口"
+    echo "13) 备份配置"
+    echo "14) 恢复配置"
+    echo "15) 更新镜像"
+    echo "16) IP 白名单"
+    echo "17) 流量限量"
+    echo "18) 开机自启"
+    echo "19) 完全卸载"
     echo "0) 退出"
     echo ""
-    echo -n "请选择 [0-18]: "
+    echo -n "请选择 [0-19]: "
 }
 
 start_proxy() {
@@ -142,11 +143,7 @@ EOF
     echo ""
     echo "✅ 代理已启动！"
     echo ""
-    echo "连接信息："
-    echo "- 端口: $PORT"
-    echo "- 原始密钥: 已隐藏"
-    echo "- 运行 ./qrcode.sh 查看 Fake TLS 连接链接"
-    echo ""
+    ./qrcode.sh
     read -p "按回车键继续..."
 }
 
@@ -225,28 +222,37 @@ show_qrcode() {
     echo "=== 连接信息 ==="
     echo ""
     echo "端口: $PORT"
-    echo "原始密钥: 已隐藏"
     echo "Fake TLS 域名: $FAKE_TLS_DOMAIN"
     echo ""
     
     if [ ! -z "$SERVER_IP4" ]; then
         echo "IPv4 服务器: $SERVER_IP4"
         PROXY_URL4_FAKE_TLS="tg://proxy?server=$SERVER_IP4&port=$PORT&secret=$FAKE_TLS_SECRET"
-        echo "IPv4 连接链接 (Fake TLS):"
+        PROXY_URL4_PLAIN="tg://proxy?server=$SERVER_IP4&port=$PORT&secret=$SECRET"
+        echo "IPv4 推荐链接 (Fake TLS):"
         echo "$PROXY_URL4_FAKE_TLS"
         echo ""
+        echo "IPv4 普通链接 (备用):"
+        echo "$PROXY_URL4_PLAIN"
+        echo ""
         
-        print_qrcode "IPv4 二维码 (Fake TLS):" "$PROXY_URL4_FAKE_TLS"
+        print_qrcode "IPv4 推荐二维码 (Fake TLS):" "$PROXY_URL4_FAKE_TLS"
+        print_qrcode "IPv4 普通二维码 (备用):" "$PROXY_URL4_PLAIN"
     fi
     
     if [ ! -z "$SERVER_IP6" ]; then
         echo "IPv6 服务器: $SERVER_IP6"
         PROXY_URL6_FAKE_TLS="tg://proxy?server=$SERVER_IP6&port=$PORT&secret=$FAKE_TLS_SECRET"
-        echo "IPv6 连接链接 (Fake TLS):"
+        PROXY_URL6_PLAIN="tg://proxy?server=$SERVER_IP6&port=$PORT&secret=$SECRET"
+        echo "IPv6 推荐链接 (Fake TLS):"
         echo "$PROXY_URL6_FAKE_TLS"
         echo ""
+        echo "IPv6 普通链接 (备用):"
+        echo "$PROXY_URL6_PLAIN"
+        echo ""
         
-        print_qrcode "IPv6 二维码 (Fake TLS):" "$PROXY_URL6_FAKE_TLS"
+        print_qrcode "IPv6 推荐二维码 (Fake TLS):" "$PROXY_URL6_FAKE_TLS"
+        print_qrcode "IPv6 普通二维码 (备用):" "$PROXY_URL6_PLAIN"
     fi
     read -p "按回车键继续..."
 }
@@ -288,6 +294,17 @@ show_stats() {
         echo "端口: $PORT"
     fi
     
+    echo ""
+    read -p "按回车键继续..."
+}
+
+show_healthcheck() {
+    echo ""
+    if [ ! -x ./healthcheck.sh ]; then
+        echo "错误: 未找到 healthcheck.sh 或没有执行权限"
+    else
+        ./healthcheck.sh
+    fi
     echo ""
     read -p "按回车键继续..."
 }
@@ -837,17 +854,18 @@ while true; do
         5) show_qrcode ;;
         6) show_monitor ;;
         7) show_stats ;;
-        8) show_report ;;
-        9) show_logs ;;
-        10) change_secret ;;
-        11) change_port ;;
-        12) backup_config ;;
-        13) restore_config ;;
-        14) update_image ;;
-        15) manage_whitelist ;;
-        16) manage_quota ;;
-        17) manage_autostart ;;
-        18) uninstall ;;
+        8) show_healthcheck ;;
+        9) show_report ;;
+        10) show_logs ;;
+        11) change_secret ;;
+        12) change_port ;;
+        13) backup_config ;;
+        14) restore_config ;;
+        15) update_image ;;
+        16) manage_whitelist ;;
+        17) manage_quota ;;
+        18) manage_autostart ;;
+        19) uninstall ;;
         0) echo ""; echo "再见！"; exit 0 ;;
         *) echo ""; echo "无效选择"; sleep 1 ;;
     esac

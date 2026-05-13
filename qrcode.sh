@@ -49,28 +49,37 @@ SERVER_IP6=$(curl -6 -s ifconfig.me 2>/dev/null)
 echo "=== Telegram 代理连接信息 ==="
 echo ""
 echo "端口: $PORT"
-echo "原始密钥: 已隐藏"
 echo "Fake TLS 域名: $FAKE_TLS_DOMAIN"
 echo ""
 
 if [ ! -z "$SERVER_IP4" ]; then
     PROXY_URL4_FAKE_TLS="tg://proxy?server=$SERVER_IP4&port=$PORT&secret=$FAKE_TLS_SECRET"
+    PROXY_URL4_PLAIN="tg://proxy?server=$SERVER_IP4&port=$PORT&secret=$SECRET"
     echo "IPv4 服务器: $SERVER_IP4"
-    echo "IPv4 连接链接 (Fake TLS):"
+    echo "IPv4 推荐链接 (Fake TLS):"
     echo "$PROXY_URL4_FAKE_TLS"
     echo ""
+    echo "IPv4 普通链接 (备用):"
+    echo "$PROXY_URL4_PLAIN"
+    echo ""
     
-    print_qrcode "IPv4 二维码 (Fake TLS):" "$PROXY_URL4_FAKE_TLS"
+    print_qrcode "IPv4 推荐二维码 (Fake TLS):" "$PROXY_URL4_FAKE_TLS"
+    print_qrcode "IPv4 普通二维码 (备用):" "$PROXY_URL4_PLAIN"
 fi
 
 if [ ! -z "$SERVER_IP6" ]; then
     PROXY_URL6_FAKE_TLS="tg://proxy?server=$SERVER_IP6&port=$PORT&secret=$FAKE_TLS_SECRET"
+    PROXY_URL6_PLAIN="tg://proxy?server=$SERVER_IP6&port=$PORT&secret=$SECRET"
     echo "IPv6 服务器: $SERVER_IP6"
-    echo "IPv6 连接链接 (Fake TLS):"
+    echo "IPv6 推荐链接 (Fake TLS):"
     echo "$PROXY_URL6_FAKE_TLS"
     echo ""
+    echo "IPv6 普通链接 (备用):"
+    echo "$PROXY_URL6_PLAIN"
+    echo ""
     
-    print_qrcode "IPv6 二维码 (Fake TLS):" "$PROXY_URL6_FAKE_TLS"
+    print_qrcode "IPv6 推荐二维码 (Fake TLS):" "$PROXY_URL6_FAKE_TLS"
+    print_qrcode "IPv6 普通二维码 (备用):" "$PROXY_URL6_PLAIN"
 fi
 
 if [ -z "$SERVER_IP4" ] && [ -z "$SERVER_IP6" ]; then
