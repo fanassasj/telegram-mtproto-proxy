@@ -23,7 +23,7 @@ echo ""
 echo "正在卸载..."
 
 # 停止并删除容器
-docker compose down -v 2>/dev/null
+docker compose down -v --rmi local 2>/dev/null
 docker rm -f telegram-mtproto-proxy 2>/dev/null
 
 # 删除定时任务

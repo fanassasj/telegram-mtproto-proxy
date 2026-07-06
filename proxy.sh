@@ -855,7 +855,7 @@ uninstall() {
     rm -f /etc/systemd/system/telegram-proxy.service
     systemctl daemon-reload
     
-    docker compose down -v 2>/dev/null
+    docker compose down -v --rmi local 2>/dev/null
     docker rm -f telegram-mtproto-proxy 2>/dev/null
     
     crontab -l 2>/dev/null | grep -v "# telegram-mtproto-proxy" | crontab - 2>/dev/null
