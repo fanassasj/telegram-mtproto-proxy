@@ -96,12 +96,9 @@ start_proxy() {
     echo ""
     echo "正在配置..."
     
-    # 自动识别 CPU 架构以应用原生平台（避免多架构模拟警告及性能开销）
-    ARCH=$(uname -m)
+    # 自动识别 CPU 架构。由于 alexbers/mtprotoproxy 官方仅发布了 linux/amd64 镜像，
+    # 在 ARM64 架构上我们必须显式指定以 linux/amd64 平台（兼容性模拟）运行，避免 Docker 报错退出。
     PLATFORM="linux/amd64"
-    if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
-        PLATFORM="linux/arm64"
-    fi
 
     mkdir -p ./config
     cat > ./config/config.py <<EOF
