@@ -2,6 +2,9 @@
 
 set -u
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR" || exit 1
+
 CONTAINER="telegram-mtproto-proxy"
 
 ok() {
@@ -79,7 +82,7 @@ BACKEND_OK=0
 for backend in $BACKENDS; do
     host=${backend%:*}
     port=${backend#*:}
-    if docker exec "$CONTAINER" bash -lc "timeout 4 bash -lc '</dev/tcp/$host/$port'" >/dev/null 2>&1; then
+    if docker exec "$CONTAINER" python3 -c "import socket; s = socket.socket(); s.settimeout(4); s.connect(('$host', $port))" >/dev/null 2>&1; then
         ok "Telegram 后端可达: $backend"
         BACKEND_OK=1
         break
@@ -87,7 +90,7 @@ for backend in $BACKENDS; do
 done
 
 if [ "$BACKEND_OK" -eq 0 ]; then
-    fail "容器内无法连接 Telegram 后端"
+    fail "容器内无法连接 Telegram 后端（容器可能缺少 python3 或网络不通）"
 fi
 
 if [ "${USE_QUOTA:-y}" = "y" ]; then

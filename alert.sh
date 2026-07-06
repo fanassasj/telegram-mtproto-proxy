@@ -1,17 +1,25 @@
 #!/bin/bash
 
+set -u
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR" || exit 1
+source "$SCRIPT_DIR/lib.sh"
 
 
 CONTAINER="telegram-mtproto-proxy"
-ALERT_FILE="/tmp/telegram-proxy-alert.log"
+ALERT_FILE="./config/alert.log"
 TRAFFIC_THRESHOLD=1000000000  # 单次检查周期增量阈值（默认 1GB）
-TRAFFIC_STATE_FILE="/tmp/telegram-proxy-traffic-last.total"
+TRAFFIC_STATE_FILE="./config/traffic-last.total"
 
-# Telegram Bot 配置 (可选)
+# Telegram Bot 配置 (优先从 .env 读取，也可在下方硬编码)
 BOT_TOKEN=""  # 填入你的 Bot Token
 CHAT_ID=""    # 填入你的 Chat ID
+
+if [ -f .env ]; then
+    # shellcheck disable=SC1091
+    source .env
+fi
 
 send_alert() {
     local message="$1"
@@ -31,27 +39,6 @@ is_over_threshold() {
     awk -v v="$value" -v t="$threshold" 'BEGIN { exit !(v > t) }'
 }
 
-to_bytes() {
-    local token="$1"
-    local normalized value unit multiplier
-
-    normalized=$(echo "$token" | tr -d ' ')
-    value=$(echo "$normalized" | sed -E 's/^([0-9.]+).*/\1/')
-    unit=$(echo "$normalized" | sed -E 's/^[0-9.]+([A-Za-z]+)$/\1/')
-    unit=${unit/iB/B}
-    unit=${unit^^}
-
-    case "$unit" in
-        B)  multiplier=1 ;;
-        KB) multiplier=1024 ;;
-        MB) multiplier=$((1024 * 1024)) ;;
-        GB) multiplier=$((1024 * 1024 * 1024)) ;;
-        TB) multiplier=$((1024 * 1024 * 1024 * 1024)) ;;
-        *)  echo 0; return ;;
-    esac
-
-    awk -v v="$value" -v m="$multiplier" 'BEGIN { printf "%.0f", v * m }'
-}
 
 # 检查容器状态
 if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER}$"; then
@@ -60,7 +47,8 @@ if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER}$"; then
 fi
 
 # 检查流量
-STATS=$(docker stats $CONTAINER --no-stream --format "{{.NetIO}}")
+RAW_STATS=$(docker stats $CONTAINER --no-stream --format "{{.NetIO}}|{{.CPUPerc}}|{{.MemPerc}}")
+STATS=$(echo "$RAW_STATS" | cut -d'|' -f1)
 RX=$(echo "$STATS" | awk -F' / ' '{print $1}')
 TX=$(echo "$STATS" | awk -F' / ' '{print $2}')
 TOTAL_TRAFFIC=$(( $(to_bytes "$RX") + $(to_bytes "$TX") ))
@@ -79,13 +67,13 @@ fi
 echo "$TOTAL_TRAFFIC" > "$TRAFFIC_STATE_FILE"
 
 # 检查 CPU 使用率
-CPU=$(docker stats $CONTAINER --no-stream --format "{{.CPUPerc}}" | sed 's/%//g')
+CPU=$(echo "$RAW_STATS" | cut -d'|' -f2 | sed 's/%//g')
 if is_over_threshold "$CPU" 80; then
     send_alert "CPU 使用率过高: ${CPU}%"
 fi
 
 # 检查内存使用
-MEM=$(docker stats $CONTAINER --no-stream --format "{{.MemPerc}}" | sed 's/%//g')
+MEM=$(echo "$RAW_STATS" | cut -d'|' -f3 | sed 's/%//g')
 if is_over_threshold "$MEM" 80; then
     send_alert "内存使用率过高: ${MEM}%"
 fi

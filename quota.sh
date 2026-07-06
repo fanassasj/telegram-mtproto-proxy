@@ -2,6 +2,10 @@
 
 set -u
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR" || exit 1
+source "$SCRIPT_DIR/lib.sh"
+
 CONTAINER="telegram-mtproto-proxy"
 STATE_FILE="./config/quota.state"
 LOG_FILE="./config/quota.log"
@@ -11,34 +15,6 @@ log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') $1" | tee -a "$LOG_FILE"
 }
 
-to_bytes() {
-    local value unit
-    value=$(printf "%s" "$1" | sed -E 's/^([0-9.]+).*/\1/')
-    unit=$(printf "%s" "$1" | sed -E 's/^[0-9.]+([A-Za-z]+)$/\1/')
-
-    awk -v value="$value" -v unit="$unit" '
-        BEGIN {
-            if (value == "" || unit == "") {
-                print 0
-                exit
-            }
-            scale["B"] = 1
-            scale["kB"] = 1000
-            scale["MB"] = 1000^2
-            scale["GB"] = 1000^3
-            scale["TB"] = 1000^4
-            scale["KiB"] = 1024
-            scale["MiB"] = 1024^2
-            scale["GiB"] = 1024^3
-            scale["TiB"] = 1024^4
-            printf "%.0f\n", value * scale[unit]
-        }
-    '
-}
-
-format_gib() {
-    awk -v bytes="$1" 'BEGIN { printf "%.2fGiB", bytes / 1024 / 1024 / 1024 }'
-}
 
 read_net_bytes() {
     local net_io rx_text tx_text

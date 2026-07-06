@@ -2,6 +2,7 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR" || exit 1
+set -u
 
 
 CONTAINER="telegram-mtproto-proxy"
@@ -18,9 +19,10 @@ mkdir -p ./config
 # 获取当前统计
 TIMESTAMP=$(date +%s)
 DATE=$(date '+%Y-%m-%d %H:%M:%S')
-STATS=$(docker stats $CONTAINER --no-stream --format "{{.NetIO}}")
-CPU=$(docker stats $CONTAINER --no-stream --format "{{.CPUPerc}}" | sed 's/%//g')
-MEM=$(docker stats $CONTAINER --no-stream --format "{{.MemUsage}}")
+RAW_STATS=$(docker stats $CONTAINER --no-stream --format "{{.NetIO}}|{{.CPUPerc}}|{{.MemUsage}}")
+STATS=$(echo "$RAW_STATS" | cut -d'|' -f1)
+CPU=$(echo "$RAW_STATS" | cut -d'|' -f2 | sed 's/%//g')
+MEM=$(echo "$RAW_STATS" | cut -d'|' -f3)
 
 # 记录到日志
 echo "$TIMESTAMP|$DATE|$STATS|$CPU|$MEM" >> $STATS_FILE

@@ -4,7 +4,9 @@
 
 ```
 telegram-mtproto-proxy/
-├── start.sh          # 主启动脚本（交互式配置）
+├── proxy.sh          # 一体化管理脚本（主入口）
+├── start.sh          # 启动脚本（已整合至 proxy.sh，保留作为转发）
+├── lib.sh            # 共用函数库
 ├── qrcode.sh         # 生成连接二维码
 ├── healthcheck.sh    # 健康检查
 ├── monitor.sh        # 实时监控
@@ -13,12 +15,18 @@ telegram-mtproto-proxy/
 ├── alert.sh          # 告警检查
 ├── uninstall.sh      # 完全卸载
 ├── README.md         # 使用文档
-└── .env              # 配置文件（自动生成）
+├── .env              # 环境变量配置文件（系统参数）
+└── config/           # 配置与运行数据目录
+    └── config.py     # 代理后端配置文件
 ```
+
+> [!NOTE]
+> 配置参数同时保存在 `.env` (供 Docker Compose 及 Bash 脚本读取) 与 `config/config.py` (供 Python 后端读取) 中。
 
 ## 核心功能
 
-### 1. 一键启动 (start.sh)
+### 1. 一键启动 (proxy.sh / start.sh)
+- 支持通过主脚本 `proxy.sh` 或向后兼容的 `start.sh` 包装器进行一键部署和启动
 - 自动生成随机端口和密钥
 - 交互式选择功能：
   - 月度流量限量（默认 30GiB）
@@ -26,15 +34,17 @@ telegram-mtproto-proxy/
   - 使用统计（历史记录）
 
 ### 2. 安全特性
-- 随机端口（10000-65535）
-- 16字节随机密钥
-- Fake TLS 推荐链接生成
-- Docker 容器隔离
+- **现代 Python 后端**：引入 `alexbers/mtprotoproxy` 后端，支持原生真实的 Fake TLS 混淆，抵抗流量检测。
+- **随机与隔离**：随机高位端口（10000-65535）、16字节随机密钥，以及 Docker 容器物理隔离。
+- **配置与权限加固**：配置文件权限收紧（`chmod 600`），敏感/临时状态文件均从公共 `/tmp/` 目录迁移至 `./config/` 私有安全目录下。
+- **防火墙规则清理**：卸载时自动清理并释放在启用白名单时配置的 iptables 防火墙规则。
 
 ### 3. 性能优化
 - CPU 限制：1核（预留 0.25核）
 - 内存限制：512MB（预留 128MB）
 - TCP 连接优化（keepalive）
+- **监控开销优化**：合并多次 `docker stats` 调用为单次，大幅降低历史报告及告警检查时的 CPU 开销。
+- **健康检查过渡**：容器健康检查机制升级为基于标准 Python socket 的本地 TCP 连接检测，避免频繁的网络请求及额外的检测开销。
 - 自动健康检查（30秒间隔）
 - 异常自动重启
 
@@ -70,7 +80,7 @@ telegram-mtproto-proxy/
 
 ## 配置说明
 
-所有配置保存在 `.env` 文件：
+所有配置同步保存在 `.env` 文件和 `config/config.py` 文件中：
 - PORT：代理端口
 - SECRET：连接密钥
 - FAKE_TLS_DOMAIN：Fake TLS 链接使用的伪装域名
@@ -89,7 +99,7 @@ telegram-mtproto-proxy/
 ## 技术栈
 
 - Docker & Docker Compose
-- Telegram 官方 MTProto Proxy
+- `alexbers/mtprotoproxy` (高性能 Python MTProto 代理后端)
 - Bash 脚本
 
 ## 注意事项
@@ -102,22 +112,32 @@ telegram-mtproto-proxy/
 
 ## 维护命令
 
+建议使用一体化主入口脚本进行日常维护：
 ```bash
-# 查看日志
+# 进入交互式菜单（包含启动、停止、重启、日志查看、限额配置、卸载等）
+./proxy.sh
+```
+
+如果需要，也可以使用标准的 Docker Compose 命令进行直接操作：
+```bash
+# 查看容器运行日志
 docker compose logs -f
 
-# 重启服务
+# 重启代理服务
 docker compose restart
 
-# 停止服务
+# 停止代理服务
 docker compose stop
 
-# 完全卸载
+# 完全卸载（也可以在 proxy.sh 菜单中执行）
 ./uninstall.sh
 ```
 
 ## 文件说明
 
-- `docker compose.yml`：自动生成，包含服务配置
-- `config/`：数据目录
-- `config/stats.log`：统计日志（启用统计时生成）
+- `docker-compose.yml`：自动生成，包含代理容器编排配置
+- `config/`：配置与状态数据目录
+- `config/config.py`：后端服务运行配置文件
+- `config/stats.log`：流量统计日志（启用统计时生成）
+- `config/alert.log`：历史告警日志
+- `config/quota.state`：流量配额检查状态数据

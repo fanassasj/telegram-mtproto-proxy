@@ -8,7 +8,7 @@
 ## 特性
 
 - 🚀 **一键部署** - 单个脚本完成所有配置
-- 🔐 **安全可靠** - 随机端口和密钥，显示 Fake TLS 推荐链接和普通备用链接
+- 🔐 **安全可靠** - 随机端口和密钥，原生支持安全且功能完整的 Fake TLS 混淆（防检测且完全可用），提供推荐的 Fake TLS 链接和普通备用链接
 - 📊 **完整监控** - 实时监控、流量统计、使用报告
 - 🔔 **智能告警** - CPU/内存异常自动通知
 - 🎯 **月度限量** - 默认每月 30GiB，每月 1 号刷新，超量自动停止代理
@@ -109,23 +109,25 @@ cd telegram-mtproto-proxy
 
 ```bash
 ./proxy.sh
-# 选择 10 (更换密钥) 或 11 (更换端口)
+# 选择 11 (更换密钥) 或 12 (更换端口)
 ```
 
 ### 备份和恢复
 
+备份和恢复配置时，crontab 定时任务也会被自动导出和导入。
+
 ```bash
 # 备份配置
-./proxy.sh  # 选择 12
+./proxy.sh  # 选择 13
 
 # 恢复配置
-./proxy.sh  # 选择 13
+./proxy.sh  # 选择 14
 ```
 
 ### IP 白名单
 
 ```bash
-./proxy.sh  # 选择 15
+./proxy.sh  # 选择 16
 # 支持单个 IP、IP 段（CIDR）、运营商 IP 段
 ```
 
@@ -142,8 +144,9 @@ CHAT_ID="your_chat_id"      # 从 @userinfobot 获取
 
 ```
 telegram-mtproto-proxy/
-├── proxy.sh          # 一体化管理脚本（推荐）
-├── start.sh          # 启动脚本
+├── proxy.sh          # 一体化管理脚本（推荐入口）
+├── start.sh          # 启动脚本（已整合至 proxy.sh，保留作为兼容性转发）
+├── lib.sh            # 共用函数库
 ├── qrcode.sh         # 二维码生成
 ├── healthcheck.sh    # 健康检查
 ├── quota.sh          # 月度流量限量
@@ -155,6 +158,8 @@ telegram-mtproto-proxy/
 ├── README.md         # 使用文档
 └── PROJECT.md        # 项目详细说明
 ```
+
+项目的配置参数分别存储于 `.env`（管理脚本配置）和 `./config/config.py`（代理服务核心配置）中。
 
 ## 连接方式
 
@@ -174,7 +179,7 @@ tg://proxy?server=YOUR_IP&port=PORT&secret=FAKE_TLS_SECRET
 ## 常见问题
 
 **Q: 端口被封怎么办？**  
-A: 运行 `./proxy.sh` 选择 11 (更换端口)
+A: 运行 `./proxy.sh` 选择 12 (更换端口)
 
 **Q: 如何提高安全性？**  
 A: 优先使用 Fake TLS 推荐链接，并按需启用 IP 白名单、定期更换密钥和端口
@@ -183,7 +188,7 @@ A: 优先使用 Fake TLS 推荐链接，并按需启用 IP 白名单、定期更
 A: 添加运营商 IP 段（如 120.0.0.0/8）或不设白名单
 
 **Q: 如何迁移到新服务器？**  
-A: 使用备份功能（选项 12/13）
+A: 使用备份功能（选项 13/14）
 
 **Q: 支持多用户吗？**  
 A: 当前版本单密钥，可通过更换密钥分配给不同用户
@@ -198,14 +203,14 @@ A: 当前版本单密钥，可通过更换密钥分配给不同用户
 
 ## 技术栈
 
-- [Telegram MTProto Proxy](https://github.com/TelegramMessenger/MTProxy) - 官方代理
+- [alexbers/mtprotoproxy](https://github.com/alexbers/mtprotoproxy) - 基于 Python 的高性能 MTProto 代理，原生支持 Fake TLS，替换了对原官方 `telegrammessenger/proxy` 镜像的依赖
 - Docker & Docker Compose - 容器化部署
 - Bash - 自动化脚本
 
 ## 卸载
 
 ```bash
-./proxy.sh  # 选择 16 (完全卸载)
+./proxy.sh  # 选择 19 (完全卸载)
 # 或
 ./uninstall.sh
 ```
@@ -220,7 +225,7 @@ MIT License
 
 ## 免责声明
 
-本项目仅供学习和研究使用，使用者需自行承担使用风险，并遵守当地法律法规。
+本项目的 Docker 镜像基于 `alexbers/mtprotoproxy` 高性能 Python 分支（原生支持 Fake TLS）构建，用以替换对原官方 `telegrammessenger/proxy` 镜像的使用。本项目仅供学习和研究使用，使用者需自行承担使用风险，并遵守当地法律法规。
 
 ---
 

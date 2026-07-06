@@ -1,5 +1,9 @@
 #!/bin/bash
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR" || exit 1
+set -u
+
 echo "=== Telegram MTProto 代理卸载 ==="
 echo ""
 echo "警告: 此操作将："
@@ -23,12 +27,23 @@ docker compose down -v 2>/dev/null
 docker rm -f telegram-mtproto-proxy 2>/dev/null
 
 # 删除定时任务
-crontab -l 2>/dev/null | grep -v "alert.sh" | grep -v "report.sh" | grep -v "quota.sh" | crontab - 2>/dev/null
+crontab -l 2>/dev/null | grep -v "# telegram-mtproto-proxy" | crontab - 2>/dev/null
+
+# 清理 systemd 服务
+systemctl disable telegram-proxy.service 2>/dev/null
+rm -f /etc/systemd/system/telegram-proxy.service
+systemctl daemon-reload 2>/dev/null
+
+# 清理 iptables 白名单规则
+if command -v iptables >/dev/null 2>&1; then
+    while iptables -D INPUT -m comment --comment "telegram-proxy" -j ACCEPT 2>/dev/null; do :; done
+    while iptables -D INPUT -m comment --comment "telegram-proxy-drop" -j DROP 2>/dev/null; do :; done
+fi
 
 # 删除配置文件
 rm -rf config/
 rm -f .env docker-compose.yml
-rm -f /tmp/telegram-proxy-alert.log
+rm -f /tmp/telegram-proxy-alert.log /tmp/telegram-proxy-traffic-last.total
 
 echo ""
 echo "✅ 卸载完成！"

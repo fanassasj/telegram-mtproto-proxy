@@ -1,11 +1,19 @@
 #!/bin/bash
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR" || exit 1
+set -u
+
 if [ ! -f .env ]; then
     echo "错误: 未找到配置文件，请先运行 ./start.sh"
     exit 1
 fi
 
 source .env
+if [ -z "${PORT:-}" ] || [ -z "${SECRET:-}" ]; then
+    echo "错误: .env 配置不完整，缺少 PORT 或 SECRET"
+    exit 1
+fi
 FAKE_TLS_DOMAIN=${FAKE_TLS_DOMAIN:-www.microsoft.com}
 FAKE_TLS_DOMAIN_HEX=$(printf "%s" "$FAKE_TLS_DOMAIN" | xxd -ps -c 256)
 FAKE_TLS_SECRET="dd${SECRET}${FAKE_TLS_DOMAIN_HEX}"

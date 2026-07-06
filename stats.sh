@@ -1,33 +1,14 @@
 #!/bin/bash
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR" || exit 1
+set -u
+source "$SCRIPT_DIR/lib.sh"
+
 CONTAINER="telegram-mtproto-proxy"
 
-to_bytes() {
-    local value unit
-    value=$(printf "%s" "$1" | sed -E 's/^([0-9.]+).*/\1/')
-    unit=$(printf "%s" "$1" | sed -E 's/^[0-9.]+([A-Za-z]+)$/\1/')
 
-    awk -v value="$value" -v unit="$unit" '
-        BEGIN {
-            if (value == "" || unit == "") {
-                print 0
-                exit
-            }
-            scale["B"] = 1
-            scale["kB"] = 1000
-            scale["MB"] = 1000^2
-            scale["GB"] = 1000^3
-            scale["TB"] = 1000^4
-            scale["KiB"] = 1024
-            scale["MiB"] = 1024^2
-            scale["GiB"] = 1024^3
-            scale["TiB"] = 1024^4
-            printf "%.0f\n", (value + 0) * scale[unit]
-        }
-    '
-}
-
-if ! docker ps | grep -q $CONTAINER; then
+if ! docker ps --format '{{.Names}}' | grep -qx "$CONTAINER"; then
     echo "错误: 容器未运行"
     exit 1
 fi
@@ -47,7 +28,7 @@ if [ "${USE_QUOTA:-y}" = "y" ] && [ -f ./config/quota.state ]; then
     source ./config/quota.state
     QUOTA_LIMIT_GB=${QUOTA_LIMIT_GB:-30}
     LIMIT_BYTES=$((QUOTA_LIMIT_GB * 1024 * 1024 * 1024))
-    NET_IO=$(docker stats $CONTAINER --no-stream --format "{{.NetIO}}")
+    NET_IO="$STATS"
     RX_TEXT=${NET_IO%% / *}
     TX_TEXT=${NET_IO##* / }
     RX_BYTES=$(to_bytes "$RX_TEXT")

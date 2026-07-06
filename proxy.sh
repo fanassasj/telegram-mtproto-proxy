@@ -2,6 +2,9 @@
 
 # Telegram MTProto Proxy 一体化管理脚本
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR" || exit 1
+
 show_menu() {
     clear
     echo "=========================================="
@@ -48,6 +51,11 @@ start_proxy() {
         echo "⚠️  检测到代理已在运行"
         echo ""
         source .env
+        if [ -z "${PORT:-}" ] || [ -z "${SECRET:-}" ]; then
+            echo "错误: .env 配置不完整"
+            read -p "按回车键继续..."
+            return
+        fi
         echo "当前配置："
         echo "- 端口: $PORT"
         echo "- 原始密钥: 已隐藏"
@@ -88,44 +96,69 @@ start_proxy() {
     echo ""
     echo "正在配置..."
     
+    mkdir -p ./config
+    cat > ./config/config.py <<EOF
+PORT = 443
+USERS = {
+    "tg": "$SECRET"
+}
+TLS_DOMAIN = "www.microsoft.com"
+EOF
+
     cat > docker-compose.yml <<EOF
 services:
   mtproto-proxy:
-    image: telegrammessenger/proxy:latest
+    image: alexbers/mtprotoproxy:latest
     container_name: telegram-mtproto-proxy
     restart: unless-stopped
     ports:
       - "$PORT:443"
-    environment:
-      - SECRET=$SECRET
     volumes:
-      - ./config:/data
+      - ./config/config.py:/home/tgproxy/config.py
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; s = socket.socket(); s.connect(('localhost', 443))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    sysctls:
+      - net.ipv4.tcp_keepalive_time=600
+      - net.ipv4.tcp_keepalive_intvl=60
+      - net.ipv4.tcp_keepalive_probes=3
 EOF
     
     docker compose up -d
     
     echo ""
     echo "设置月度流量限量..."
-    (crontab -l 2>/dev/null | grep -v "quota.sh"; echo "*/5 * * * * $(pwd)/quota.sh >> /dev/null 2>&1") | crontab -
+    (crontab -l 2>/dev/null | grep -v "# telegram-mtproto-proxy"; echo "*/5 * * * * $(pwd)/quota.sh >> /dev/null 2>&1 # telegram-mtproto-proxy") | crontab -
     ./quota.sh >/dev/null 2>&1
     echo "✅ 月度流量限量已启用: ${QUOTA_LIMIT_GB}GiB，每月 ${QUOTA_RESET_DAY} 号刷新"
     
     if [ "$USE_ALERT" = "y" ]; then
         echo ""
         echo "设置告警监控..."
-        (crontab -l 2>/dev/null | grep -v "alert.sh"; echo "*/5 * * * * $(pwd)/alert.sh") | crontab -
+        (crontab -l 2>/dev/null | grep -v "# telegram-mtproto-proxy"; echo "*/5 * * * * $(pwd)/alert.sh # telegram-mtproto-proxy") | crontab -
         echo "✅ 告警监控已启用（每 5 分钟检查）"
     fi
     
     if [ "$USE_STATS" = "y" ]; then
         echo ""
         echo "设置使用统计..."
-        (crontab -l 2>/dev/null | grep -v "report.sh"; echo "0 * * * * $(pwd)/report.sh >> /dev/null 2>&1") | crontab -
+        (crontab -l 2>/dev/null | grep -v "# telegram-mtproto-proxy"; echo "0 * * * * $(pwd)/report.sh >> /dev/null 2>&1 # telegram-mtproto-proxy") | crontab -
         echo "✅ 使用统计已启用（每小时记录）"
     fi
     
@@ -179,81 +212,9 @@ show_qrcode() {
         return
     fi
     
-    source .env
-    FAKE_TLS_DOMAIN=${FAKE_TLS_DOMAIN:-www.microsoft.com}
-    FAKE_TLS_DOMAIN_HEX=$(printf "%s" "$FAKE_TLS_DOMAIN" | xxd -ps -c 256)
-    FAKE_TLS_SECRET="dd${SECRET}${FAKE_TLS_DOMAIN_HEX}"
-
-    ensure_qrencode() {
-        if command -v qrencode >/dev/null 2>&1; then
-            return 0
-        fi
-
-        echo "未检测到 qrencode，正在安装本地二维码工具..."
-        if command -v apt-get >/dev/null 2>&1; then
-            apt-get update -qq && apt-get install -y qrencode -qq
-        else
-            echo "错误: 当前系统没有 apt-get，请手动安装 qrencode"
-            return 1
-        fi
-
-        command -v qrencode >/dev/null 2>&1
-    }
-
-    print_qrcode() {
-        local label="$1"
-        local url="$2"
-
-        if ensure_qrencode; then
-            echo "$label"
-            qrencode -t ANSIUTF8 "$url"
-            echo ""
-        else
-            echo "无法生成二维码: 未安装 qrencode"
-            echo "已禁止在线二维码，避免泄露代理链接"
-            echo ""
-        fi
-    }
-
-    SERVER_IP4=$(curl -4 -s ifconfig.me 2>/dev/null || curl -s api.ipify.org 2>/dev/null)
-    SERVER_IP6=$(curl -6 -s ifconfig.me 2>/dev/null)
-    
     echo ""
-    echo "=== 连接信息 ==="
+    ./qrcode.sh
     echo ""
-    echo "端口: $PORT"
-    echo "Fake TLS 域名: $FAKE_TLS_DOMAIN"
-    echo ""
-    
-    if [ ! -z "$SERVER_IP4" ]; then
-        echo "IPv4 服务器: $SERVER_IP4"
-        PROXY_URL4_FAKE_TLS="tg://proxy?server=$SERVER_IP4&port=$PORT&secret=$FAKE_TLS_SECRET"
-        PROXY_URL4_PLAIN="tg://proxy?server=$SERVER_IP4&port=$PORT&secret=$SECRET"
-        echo "IPv4 推荐链接 (Fake TLS):"
-        echo "$PROXY_URL4_FAKE_TLS"
-        echo ""
-        echo "IPv4 普通链接 (备用):"
-        echo "$PROXY_URL4_PLAIN"
-        echo ""
-        
-        print_qrcode "IPv4 推荐二维码 (Fake TLS):" "$PROXY_URL4_FAKE_TLS"
-        print_qrcode "IPv4 普通二维码 (备用):" "$PROXY_URL4_PLAIN"
-    fi
-    
-    if [ ! -z "$SERVER_IP6" ]; then
-        echo "IPv6 服务器: $SERVER_IP6"
-        PROXY_URL6_FAKE_TLS="tg://proxy?server=$SERVER_IP6&port=$PORT&secret=$FAKE_TLS_SECRET"
-        PROXY_URL6_PLAIN="tg://proxy?server=$SERVER_IP6&port=$PORT&secret=$SECRET"
-        echo "IPv6 推荐链接 (Fake TLS):"
-        echo "$PROXY_URL6_FAKE_TLS"
-        echo ""
-        echo "IPv6 普通链接 (备用):"
-        echo "$PROXY_URL6_PLAIN"
-        echo ""
-        
-        print_qrcode "IPv6 推荐二维码 (Fake TLS):" "$PROXY_URL6_FAKE_TLS"
-        print_qrcode "IPv6 普通二维码 (备用):" "$PROXY_URL6_PLAIN"
-    fi
     read -p "按回车键继续..."
 }
 
@@ -289,7 +250,13 @@ show_stats() {
     echo ""
     PORT=$(docker port telegram-mtproto-proxy 443 2>/dev/null | cut -d: -f2)
     if [ ! -z "$PORT" ]; then
-        CONNECTIONS=$(netstat -an 2>/dev/null | grep ":$PORT" | grep ESTABLISHED | wc -l)
+        if command -v ss >/dev/null 2>&1; then
+            CONNECTIONS=$(ss -tan state established "( sport = :$PORT or dport = :$PORT )" 2>/dev/null | tail -n +2 | wc -l)
+        elif command -v netstat >/dev/null 2>&1; then
+            CONNECTIONS=$(netstat -an 2>/dev/null | grep ":$PORT" | grep ESTABLISHED | wc -l)
+        else
+            CONNECTIONS="未知"
+        fi
         echo "当前活跃连接数: $CONNECTIONS"
         echo "端口: $PORT"
     fi
@@ -359,6 +326,11 @@ change_secret() {
     echo ""
     
     source .env
+    if [ -z "${PORT:-}" ] || [ -z "${SECRET:-}" ]; then
+        echo "错误: .env 配置不完整"
+        read -p "按回车键继续..."
+        return
+    fi
     OLD_SECRET=$SECRET
     NEW_SECRET=$(head -c 16 /dev/urandom | xxd -ps)
     
@@ -375,7 +347,9 @@ change_secret() {
     
     # 更新配置文件
     sed -i "s/SECRET=$OLD_SECRET/SECRET=$NEW_SECRET/" .env
-    sed -i "s/SECRET=$OLD_SECRET/SECRET=$NEW_SECRET/" docker-compose.yml
+    if [ -f ./config/config.py ]; then
+        sed -i "s/\"tg\": \"$OLD_SECRET\"/\"tg\": \"$NEW_SECRET\"/" ./config/config.py
+    fi
     
     # 重启服务
     docker compose up -d --force-recreate
@@ -400,6 +374,11 @@ change_port() {
     echo ""
     
     source .env
+    if [ -z "${PORT:-}" ] || [ -z "${SECRET:-}" ]; then
+        echo "错误: .env 配置不完整"
+        read -p "按回车键继续..."
+        return
+    fi
     OLD_PORT=$PORT
     NEW_PORT=$((RANDOM % 55535 + 10000))
     
@@ -416,7 +395,7 @@ change_port() {
     
     # 更新配置文件
     sed -i "s/PORT=$OLD_PORT/PORT=$NEW_PORT/" .env
-    sed -i "s/$OLD_PORT/$NEW_PORT/g" docker-compose.yml
+    sed -i "s/\"$OLD_PORT:443\"/\"$NEW_PORT:443\"/" docker-compose.yml
     
     # 重启服务
     docker compose up -d --force-recreate
@@ -443,7 +422,9 @@ backup_config() {
     
     BACKUP_FILE="telegram-proxy-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
     
-    tar -czf "$BACKUP_FILE" .env docker-compose.yml config/ 2>/dev/null
+    crontab -l 2>/dev/null | grep "# telegram-mtproto-proxy" > crontab.bak 2>/dev/null || true
+    tar -czf "$BACKUP_FILE" .env docker-compose.yml config/ crontab.bak 2>/dev/null
+    rm -f crontab.bak
     
     echo "✅ 配置已备份到: $BACKUP_FILE"
     echo ""
@@ -451,6 +432,7 @@ backup_config() {
     echo "- 配置文件 (.env)"
     echo "- Docker 配置 (docker-compose.yml)"
     echo "- 数据目录 (config/)"
+    echo "- 定时任务 (crontab.bak)"
     echo ""
     read -p "按回车键继续..."
 }
@@ -486,6 +468,13 @@ restore_config() {
     
     # 恢复备份
     tar -xzf "$BACKUP_FILE"
+    
+    # 恢复定时任务
+    if [ -f crontab.bak ]; then
+        (crontab -l 2>/dev/null | grep -v "# telegram-mtproto-proxy"; cat crontab.bak) | crontab - 2>/dev/null
+        rm -f crontab.bak
+        echo "✅ 定时任务已恢复"
+    fi
     
     # 启动服务
     docker compose up -d
@@ -550,6 +539,11 @@ manage_whitelist() {
                 echo "错误: 代理未启动"
             else
                 source .env
+                if [ -z "${PORT:-}" ] || [ -z "${SECRET:-}" ]; then
+                    echo "错误: .env 配置不完整"
+                    read -p "按回车键继续..."
+                    return
+                fi
                 echo ""
                 read -p "输入允许的 IP 地址: " ALLOW_IP
                 iptables -I INPUT -p tcp --dport $PORT -s $ALLOW_IP -m comment --comment "telegram-proxy" -j ACCEPT
@@ -560,6 +554,7 @@ manage_whitelist() {
                     iptables -A INPUT -p tcp --dport $PORT -m comment --comment "telegram-proxy-drop" -j DROP
                     echo "✅ 已启用白名单模式（其他 IP 将被拒绝）"
                 fi
+                echo "⚠️  提示: iptables 规则重启后将丢失，建议安装 iptables-persistent 持久化"
             fi
             ;;
         3)
@@ -568,6 +563,11 @@ manage_whitelist() {
                 echo "错误: 代理未启动"
             else
                 source .env
+                if [ -z "${PORT:-}" ] || [ -z "${SECRET:-}" ]; then
+                    echo "错误: .env 配置不完整"
+                    read -p "按回车键继续..."
+                    return
+                fi
                 echo ""
                 echo "常用运营商 IP 段示例:"
                 echo "- 中国移动: 120.0.0.0/8"
@@ -583,6 +583,7 @@ manage_whitelist() {
                     iptables -A INPUT -p tcp --dport $PORT -m comment --comment "telegram-proxy-drop" -j DROP
                     echo "✅ 已启用白名单模式（其他 IP 将被拒绝）"
                 fi
+                echo "⚠️  提示: iptables 规则重启后将丢失，建议安装 iptables-persistent 持久化"
             fi
             ;;
         4)
@@ -591,6 +592,11 @@ manage_whitelist() {
                 echo "错误: 代理未启动"
             else
                 source .env
+                if [ -z "${PORT:-}" ] || [ -z "${SECRET:-}" ]; then
+                    echo "错误: .env 配置不完整"
+                    read -p "按回车键继续..."
+                    return
+                fi
                 echo ""
                 echo "检测当前连接的 IP..."
                 CURRENT_IP=$(who am i | awk '{print $5}' | tr -d '()')
@@ -615,6 +621,7 @@ manage_whitelist() {
                         iptables -A INPUT -p tcp --dport $PORT -m comment --comment "telegram-proxy-drop" -j DROP
                         echo "✅ 已启用白名单模式（其他 IP 将被拒绝）"
                     fi
+                    echo "⚠️  提示: iptables 规则重启后将丢失，建议安装 iptables-persistent 持久化"
                 fi
             fi
             ;;
@@ -662,6 +669,11 @@ manage_quota() {
     fi
 
     source .env
+    if [ -z "${PORT:-}" ] || [ -z "${SECRET:-}" ]; then
+        echo "错误: .env 配置不完整"
+        read -p "按回车键继续..."
+        return
+    fi
     USE_QUOTA=${USE_QUOTA:-y}
     QUOTA_LIMIT_GB=${QUOTA_LIMIT_GB:-30}
     QUOTA_RESET_DAY=${QUOTA_RESET_DAY:-1}
@@ -692,7 +704,7 @@ manage_quota() {
             ;;
         2)
             sed -i "s/^USE_QUOTA=.*/USE_QUOTA=y/" .env
-            (crontab -l 2>/dev/null | grep -v "quota.sh"; echo "*/5 * * * * $(pwd)/quota.sh >> /dev/null 2>&1") | crontab -
+            (crontab -l 2>/dev/null | grep -v "# telegram-mtproto-proxy"; echo "*/5 * * * * $(pwd)/quota.sh >> /dev/null 2>&1 # telegram-mtproto-proxy") | crontab -
             ./quota.sh reset >/dev/null 2>&1
             echo "✅ 流量限量已启用"
             ;;
@@ -830,11 +842,17 @@ uninstall() {
     docker compose down -v 2>/dev/null
     docker rm -f telegram-mtproto-proxy 2>/dev/null
     
-    crontab -l 2>/dev/null | grep -v "alert.sh" | grep -v "report.sh" | grep -v "quota.sh" | crontab - 2>/dev/null
+    crontab -l 2>/dev/null | grep -v "# telegram-mtproto-proxy" | crontab - 2>/dev/null
+    
+    # 清理 iptables 白名单规则
+    if command -v iptables >/dev/null 2>&1; then
+        while iptables -D INPUT -m comment --comment "telegram-proxy" -j ACCEPT 2>/dev/null; do :; done
+        while iptables -D INPUT -m comment --comment "telegram-proxy-drop" -j DROP 2>/dev/null; do :; done
+    fi
     
     rm -rf config/
     rm -f .env docker-compose.yml
-    rm -f /tmp/telegram-proxy-alert.log
+    rm -f /tmp/telegram-proxy-alert.log /tmp/telegram-proxy-traffic-last.total
     
     echo ""
     echo "✅ 卸载完成！"
