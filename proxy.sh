@@ -96,9 +96,20 @@ start_proxy() {
     echo ""
     echo "正在配置..."
     
-    # 自动识别 CPU 架构。由于 alexbers/mtprotoproxy 官方仅发布了 linux/amd64 镜像，
-    # 在 ARM64 架构上我们必须显式指定以 linux/amd64 平台（兼容性模拟）运行，避免 Docker 报错退出。
-    PLATFORM="linux/amd64"
+    # 自动在本地为当前 CPU 架构构建原生镜像（完美解决 ARM64/AMD64 平台兼容性，实现原生性能）
+    cat > Dockerfile <<EOF
+FROM ubuntu:24.04
+
+RUN apt-get update -qq && apt-get install -y -qq git python3 python3-uvloop python3-cryptography python3-socks libcap2-bin && apt-get clean
+
+WORKDIR /home/tgproxy
+RUN git clone -b stable https://github.com/alexbers/mtprotoproxy.git .
+
+RUN setcap cap_net_bind_service=+ep \$(readlink -f /usr/bin/python3)
+
+USER 1000
+CMD ["python3", "mtprotoproxy.py"]
+EOF
 
     mkdir -p ./config
     cat > ./config/config.py <<EOF
@@ -112,8 +123,8 @@ EOF
     cat > docker-compose.yml <<EOF
 services:
   mtproto-proxy:
-    image: alexbers/mtprotoproxy:latest
-    platform: $PLATFORM
+    build: .
+    image: mtprotoproxy:local
     container_name: telegram-mtproto-proxy
     restart: unless-stopped
     ports:
@@ -856,7 +867,7 @@ uninstall() {
     fi
     
     rm -rf config/
-    rm -f .env docker-compose.yml
+    rm -f .env docker-compose.yml Dockerfile
     rm -f /tmp/telegram-proxy-alert.log /tmp/telegram-proxy-traffic-last.total
     
     echo ""

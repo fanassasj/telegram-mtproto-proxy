@@ -42,7 +42,7 @@ fi
 
 # 删除配置文件
 rm -rf config/
-rm -f .env docker-compose.yml
+rm -f .env docker-compose.yml Dockerfile
 rm -f /tmp/telegram-proxy-alert.log /tmp/telegram-proxy-traffic-last.total
 
 echo ""
