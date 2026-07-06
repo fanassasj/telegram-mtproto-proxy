@@ -117,7 +117,7 @@ PORT = 443
 USERS = {
     "tg": "$SECRET"
 }
-TLS_DOMAIN = "www.microsoft.com"
+TLS_DOMAIN = "www.google.com"
 EOF
 
     cat > docker-compose.yml <<EOF
@@ -181,7 +181,7 @@ EOF
     cat > .env <<EOF
 PORT=$PORT
 SECRET=$SECRET
-FAKE_TLS_DOMAIN=www.microsoft.com
+FAKE_TLS_DOMAIN=www.google.com
 USE_QUOTA=$USE_QUOTA
 QUOTA_LIMIT_GB=$QUOTA_LIMIT_GB
 QUOTA_RESET_DAY=$QUOTA_RESET_DAY

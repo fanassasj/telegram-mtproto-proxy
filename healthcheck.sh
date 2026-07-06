@@ -31,7 +31,7 @@ if [ ! -f .env ]; then
 fi
 
 source .env
-FAKE_TLS_DOMAIN=${FAKE_TLS_DOMAIN:-www.microsoft.com}
+FAKE_TLS_DOMAIN=${FAKE_TLS_DOMAIN:-www.google.com}
 FAKE_TLS_DOMAIN_HEX=$(printf "%s" "$FAKE_TLS_DOMAIN" | xxd -ps -c 256)
 FAKE_TLS_SECRET="dd${SECRET}${FAKE_TLS_DOMAIN_HEX}"
 
