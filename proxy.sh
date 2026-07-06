@@ -96,6 +96,13 @@ start_proxy() {
     echo ""
     echo "正在配置..."
     
+    # 自动识别 CPU 架构以应用原生平台（避免多架构模拟警告及性能开销）
+    ARCH=$(uname -m)
+    PLATFORM="linux/amd64"
+    if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
+        PLATFORM="linux/arm64"
+    fi
+
     mkdir -p ./config
     cat > ./config/config.py <<EOF
 PORT = 443
@@ -109,6 +116,7 @@ EOF
 services:
   mtproto-proxy:
     image: alexbers/mtprotoproxy:latest
+    platform: $PLATFORM
     container_name: telegram-mtproto-proxy
     restart: unless-stopped
     ports:
